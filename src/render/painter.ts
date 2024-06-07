@@ -26,6 +26,7 @@ import {drawHeatmap} from './draw_heatmap';
 import {drawLine} from './draw_line';
 import {drawFill} from './draw_fill';
 import {drawFillExtrusion} from './draw_fill_extrusion';
+import {drawFillHeatmap} from './draw_fill_heatmap';
 import {drawHillshade} from './draw_hillshade';
 import {drawRaster} from './draw_raster';
 import {drawBackground} from './draw_background';
@@ -511,6 +512,9 @@ export class Painter {
                 break;
             case 'fill-extrusion':
                 drawFillExtrusion(painter, sourceCache, layer as any, coords);
+                break;
+            case 'fill-heatmap':
+                drawFillHeatmap(painter, sourceCache, layer as any, coords);
                 break;
             case 'hillshade':
                 drawHillshade(painter, sourceCache, layer as any, coords);

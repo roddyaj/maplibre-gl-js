@@ -1,5 +1,6 @@
 uniform sampler2D u_image;
 uniform sampler2D u_color_ramp;
+uniform float u_opacity;
 uniform float u_width;
 uniform float u_height;
 
@@ -61,28 +62,20 @@ void main() {
     kernel[47] = 0.009196;
     kernel[48] = 0.004922;
 
-    // Get the fragment values in the square around this fragment
-    float sampleValues[size];
+    // Blur the fragment by applying the kernel to surrounding fragments
     vec2 pixelOffset = 1.0 / vec2(u_width, u_height);
     const float edgeDistance = float(dim - 1) / 2.0;
-    float totalValue = 0.0;
+    float blurredValue = 0.0;
     for (int i = 0; i < size; i++) {
         float xOffset = float(i / dim) - edgeDistance;
         float yOffset = mod(float(i), float(dim)) - edgeDistance;
         vec2 offset = vec2(xOffset * pixelOffset.x, -yOffset * pixelOffset.y);
-        sampleValues[i] = texture(u_image, v_pos + offset).r;
-        totalValue += sampleValues[i];
+        blurredValue += texture(u_image, v_pos + offset).r * kernel[i];
     }
 
-    if (totalValue > 0.0) {
-        // Apply the kernel to get the blurred value
-        float blurredValue = 0.0;
-        for (int i = 0; i < size; i++) {
-            blurredValue += sampleValues[i] * kernel[i];
-        }
-
+    if (blurredValue > 0.0) {
         // Map value to color
-        fragColor = texture(u_color_ramp, vec2(blurredValue, 0.5));
+        fragColor = texture(u_color_ramp, vec2(blurredValue, 0.5)) * u_opacity;
     } else {
         fragColor = vec4(0.0);
     }

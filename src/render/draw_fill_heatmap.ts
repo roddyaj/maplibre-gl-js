@@ -67,7 +67,7 @@ function drawFillTiles(
         const terrainData = painter.style.map.terrain && painter.style.map.terrain.getTerrainData(coord);
         const terrainCoord = terrainData ? coord : null;
         const posMatrix = terrainCoord ? terrainCoord.posMatrix : coord.posMatrix;
-        const uniformValues = fillHeatmapUniformValues(posMatrix, tile, zoom, layer.paint.get('fill-heatmap-intensity'));
+        const uniformValues = fillHeatmapUniformValues(posMatrix, tile, zoom);
 
         program.draw(painter.context, gl.TRIANGLES, DepthMode.disabled, stencilMode, colorMode, CullFaceMode.disabled,
             uniformValues, terrainData, layer.id, bucket.layoutVertexBuffer, bucket.indexBuffer, bucket.segments,

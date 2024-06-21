@@ -16,7 +16,6 @@ import type {FillHeatmapStyleLayer} from '../../style/style_layer/fill_heatmap_s
 
 export type FillHeatmapUniformsType = {
     'u_extrude_scale': Uniform1f;
-    'u_intensity': Uniform1f;
     'u_matrix': UniformMatrix4f;
 };
 
@@ -32,7 +31,6 @@ export type FillHeatmapTextureUniformsType = {
 
 const fillHeatmapUniforms = (context: Context, locations: UniformLocations): FillHeatmapUniformsType => ({
     'u_extrude_scale': new Uniform1f(context, locations.u_extrude_scale),
-    'u_intensity': new Uniform1f(context, locations.u_intensity),
     'u_matrix': new UniformMatrix4f(context, locations.u_matrix)
 });
 
@@ -46,10 +44,9 @@ const fillHeatmapTextureUniforms = (context: Context, locations: UniformLocation
     'u_height': new Uniform1f(context, locations.u_height)
 });
 
-const fillHeatmapUniformValues = (matrix: mat4, tile: Tile, zoom: number, intensity: number): UniformValues<FillHeatmapUniformsType> => ({
+const fillHeatmapUniformValues = (matrix: mat4, tile: Tile, zoom: number): UniformValues<FillHeatmapUniformsType> => ({
     'u_matrix': matrix,
     'u_extrude_scale': pixelsToTileUnits(tile, 1, zoom),
-    'u_intensity': intensity
 });
 
 const fillHeatmapTextureUniformValues = (

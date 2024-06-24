@@ -3,6 +3,7 @@ import {HeatmapStyleLayer} from './style_layer/heatmap_style_layer';
 import {HillshadeStyleLayer} from './style_layer/hillshade_style_layer';
 import {FillStyleLayer} from './style_layer/fill_style_layer';
 import {FillExtrusionStyleLayer} from './style_layer/fill_extrusion_style_layer';
+import {FillHeatmapStyleLayer} from './style_layer/fill_heatmap_style_layer';
 import {LineStyleLayer} from './style_layer/line_style_layer';
 import {SymbolStyleLayer} from './style_layer/symbol_style_layer';
 import {BackgroundStyleLayer} from './style_layer/background_style_layer';
@@ -26,6 +27,8 @@ export function createStyleLayer(layer: LayerSpecification | CustomLayerInterfac
             return new FillExtrusionStyleLayer(layer);
         case 'heatmap':
             return new HeatmapStyleLayer(layer);
+        case 'fill-heatmap':
+            return new FillHeatmapStyleLayer(layer);
         case 'hillshade':
             return new HillshadeStyleLayer(layer);
         case 'line':

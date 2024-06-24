@@ -143,6 +143,7 @@ const layoutAttributes = {
     circle: circleAttributes,
     fill: fillAttributes,
     'fill-extrusion': fillExtrusionAttributes,
+    'fill-heatmap': fillAttributes,
     heatmap: circleAttributes,
     line: lineLayoutAttributes,
     lineExt: lineLayoutAttributesExt,

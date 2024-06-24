@@ -15,6 +15,10 @@ import heatmapFrag from './heatmap.fragment.glsl.g';
 import heatmapVert from './heatmap.vertex.glsl.g';
 import heatmapTextureFrag from './heatmap_texture.fragment.glsl.g';
 import heatmapTextureVert from './heatmap_texture.vertex.glsl.g';
+import fillHeatmapFrag from './fill_heatmap.fragment.glsl.g';
+import fillHeatmapVert from './fill_heatmap.vertex.glsl.g';
+import fillHeatmapTextureFrag from './fill_heatmap_texture.fragment.glsl.g';
+import fillHeatmapTextureVert from './fill_heatmap_texture.vertex.glsl.g';
 import collisionBoxFrag from './collision_box.fragment.glsl.g';
 import collisionBoxVert from './collision_box.vertex.glsl.g';
 import collisionCircleFrag from './collision_circle.fragment.glsl.g';
@@ -66,6 +70,8 @@ export const shaders = {
     clippingMask: compile(clippingMaskFrag, clippingMaskVert),
     heatmap: compile(heatmapFrag, heatmapVert),
     heatmapTexture: compile(heatmapTextureFrag, heatmapTextureVert),
+    fillHeatmap: compile(fillHeatmapFrag, fillHeatmapVert),
+    fillHeatmapTexture: compile(fillHeatmapTextureFrag, fillHeatmapTextureVert),
     collisionBox: compile(collisionBoxFrag, collisionBoxVert),
     collisionCircle: compile(collisionCircleFrag, collisionCircleVert),
     debug: compile(debugFrag, debugVert),

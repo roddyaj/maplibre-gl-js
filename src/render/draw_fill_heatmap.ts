@@ -17,7 +17,7 @@ import type {FillHeatmapStyleLayer} from '../style/style_layer/fill_heatmap_styl
 import type {FillHeatmapBucket} from '../data/bucket/fill_heatmap_bucket';
 import type {OverscaledTileID} from '../source/tile_id';
 
-const scaleFactor = 2;
+const scaleFactor = 1.5;
 
 export function drawFillHeatmap(painter: Painter, sourceCache: SourceCache, layer: FillHeatmapStyleLayer, coords: Array<OverscaledTileID>) {
     if (layer.paint.get('fill-heatmap-opacity') === 0) {

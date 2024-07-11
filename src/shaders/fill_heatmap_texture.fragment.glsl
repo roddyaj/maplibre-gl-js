@@ -8,27 +8,41 @@ uniform float u_dir;
 in vec2 v_pos;
 
 void main() {
-    const int size = 17;
+    const int size = 31;
 
     // Define a Gaussian kernel
     float kernel[size];
-    kernel[0] = 0.015324;
-    kernel[1] = 0.023821;
-    kernel[2] = 0.034915;
-    kernel[3] = 0.048253;
-    kernel[4] = 0.062876;
-    kernel[5] = 0.077250;
-    kernel[6] = 0.089488;
-    kernel[7] = 0.097743;
-    kernel[8] = 0.100660;
-    kernel[9] = 0.097743;
-    kernel[10] = 0.089488;
-    kernel[11] = 0.077250;
-    kernel[12] = 0.062876;
-    kernel[13] = 0.048253;
-    kernel[14] = 0.034915;
-    kernel[15] = 0.023821;
-    kernel[16] = 0.015324;
+    kernel[0] = 0.003280;
+    kernel[1] = 0.004829;
+    kernel[2] = 0.006922;
+    kernel[3] = 0.009660;
+    kernel[4] = 0.013127;
+    kernel[5] = 0.017368;
+    kernel[6] = 0.022376;
+    kernel[7] = 0.028069;
+    kernel[8] = 0.034283;
+    kernel[9] = 0.040772;
+    kernel[10] = 0.047212;
+    kernel[11] = 0.053232;
+    kernel[12] = 0.058439;
+    kernel[13] = 0.062468;
+    kernel[14] = 0.065017;
+    kernel[15] = 0.065890;
+    kernel[16] = 0.065017;
+    kernel[17] = 0.062468;
+    kernel[18] = 0.058439;
+    kernel[19] = 0.053232;
+    kernel[20] = 0.047212;
+    kernel[21] = 0.040772;
+    kernel[22] = 0.034283;
+    kernel[23] = 0.028069;
+    kernel[24] = 0.022376;
+    kernel[25] = 0.017368;
+    kernel[26] = 0.013127;
+    kernel[27] = 0.009660;
+    kernel[28] = 0.006922;
+    kernel[29] = 0.004829;
+    kernel[30] = 0.003280;
 
     // Blur the fragment by applying the kernel to surrounding fragments
     // The blur dimension is determined by u_dir which is 0 or 1

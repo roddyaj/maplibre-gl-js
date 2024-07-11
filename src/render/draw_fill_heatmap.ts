@@ -17,17 +17,18 @@ import type {FillHeatmapStyleLayer} from '../style/style_layer/fill_heatmap_styl
 import type {FillHeatmapBucket} from '../data/bucket/fill_heatmap_bucket';
 import type {OverscaledTileID} from '../source/tile_id';
 
-const scaleFactor = 4;
+const scaleFactor = 1.5;
 
 export function drawFillHeatmap(painter: Painter, sourceCache: SourceCache, layer: FillHeatmapStyleLayer, coords: Array<OverscaledTileID>) {
     if (layer.paint.get('fill-heatmap-opacity') === 0) {
         return;
     }
 
+    const context = painter.context;
     if (painter.renderPass === 'offscreen') {
-        const context = painter.context;
+        // Render the tiles to an offscreen buffer using the red channel
 
-        bindFramebuffer(context, painter, layer);
+        bindFramebuffer(context, painter, layer, 0);
 
         context.clear({color: Color.transparent});
         painter.clearStencil();
@@ -38,8 +39,21 @@ export function drawFillHeatmap(painter: Painter, sourceCache: SourceCache, laye
         context.viewport.set([0, 0, painter.width, painter.height]);
 
     } else if (painter.renderPass === 'translucent') {
-        painter.context.setColorMode(painter.colorModeForRenderPass());
-        renderTextureToMap(painter, layer);
+        // 2-pass blur step 1: Blur the texture in one dimension, rendering to a second buffer
+
+        bindFramebuffer(context, painter, layer, 1);
+
+        context.clear({color: Color.transparent});
+        context.setColorMode(painter.colorModeForRenderPass());
+
+        renderTexture(painter, layer, 0);
+
+        // 2-pass blur step 2: Blur the texture in the other dimension, apply the color ramp, rendering to the map
+
+        context.viewport.set([0, 0, painter.width, painter.height]);
+        context.bindFramebuffer.set(null);
+
+        renderTexture(painter, layer, 1);
     }
 }
 
@@ -75,14 +89,14 @@ function drawFillTiles(
     }
 }
 
-function bindFramebuffer(context: Context, painter: Painter, layer: FillHeatmapStyleLayer) {
+function bindFramebuffer(context: Context, painter: Painter, layer: FillHeatmapStyleLayer, fboId: number) {
     const gl = context.gl;
     context.activeTexture.set(gl.TEXTURE1);
 
     // Use a downscaled screen texture for better performance and increased blur
     context.viewport.set([0, 0, painter.width / scaleFactor, painter.height / scaleFactor]);
 
-    let fbo = layer.heatmapFbo;
+    let fbo = fboId === 0 ? layer.heatmapFbo0 : layer.heatmapFbo1;
 
     if (!fbo) {
         const texture = gl.createTexture();
@@ -92,7 +106,12 @@ function bindFramebuffer(context: Context, painter: Painter, layer: FillHeatmapS
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 
-        fbo = layer.heatmapFbo = context.createFramebuffer(painter.width / scaleFactor, painter.height / scaleFactor, true, true);
+        fbo = context.createFramebuffer(painter.width / scaleFactor, painter.height / scaleFactor, true, true);
+        if (fboId === 0) {
+            layer.heatmapFbo0 = fbo;
+        } else {
+            layer.heatmapFbo1 = fbo;
+        }
         fbo.depthAttachment.set(context.createRenderbuffer(gl.DEPTH_STENCIL, painter.width / scaleFactor, painter.height / scaleFactor));
 
         bindTextureToFramebuffer(context, painter, texture, fbo);
@@ -115,14 +134,14 @@ function bindTextureToFramebuffer(context: Context, painter: Painter, texture: W
     fbo.colorAttachment.set(texture);
 }
 
-function renderTextureToMap(painter: Painter, layer: FillHeatmapStyleLayer) {
+function renderTexture(painter: Painter, layer: FillHeatmapStyleLayer, fboId: number) {
     const context = painter.context;
     const gl = context.gl;
 
     // Here we bind two different textures from which we'll sample in drawing
     // heatmaps: the kernel texture, prepared in the offscreen pass, and a
     // color ramp texture.
-    const fbo = layer.heatmapFbo;
+    const fbo = fboId === 0 ? layer.heatmapFbo0 : layer.heatmapFbo1;
     if (!fbo) return;
     context.activeTexture.set(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, fbo.colorAttachment.get());
@@ -133,10 +152,11 @@ function renderTextureToMap(painter: Painter, layer: FillHeatmapStyleLayer) {
         colorRampTexture = layer.colorRampTexture = new Texture(context, layer.colorRamp, gl.RGBA);
     }
     colorRampTexture.bind(gl.LINEAR, gl.CLAMP_TO_EDGE);
+    const dir = fboId;
 
     painter.useProgram('fillHeatmapTexture').draw(context, gl.TRIANGLES,
         DepthMode.disabled, StencilMode.disabled, painter.colorModeForRenderPass(), CullFaceMode.disabled,
-        fillHeatmapTextureUniformValues(painter, layer, 0, 1, scaleFactor), null,
+        fillHeatmapTextureUniformValues(painter, layer, 0, 1, scaleFactor, dir), null,
         layer.id, painter.viewportBuffer, painter.quadTriangleIndexBuffer,
         painter.viewportSegments, layer.paint, painter.transform.zoom);
 }

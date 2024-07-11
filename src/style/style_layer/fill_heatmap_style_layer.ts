@@ -16,7 +16,8 @@ import type {LayerSpecification} from '@maplibre/maplibre-gl-style-spec';
  */
 export class FillHeatmapStyleLayer extends StyleLayer {
 
-    heatmapFbo: Framebuffer;
+    heatmapFbo0: Framebuffer;
+    heatmapFbo1: Framebuffer;
     colorRamp: RGBAImage;
     colorRampTexture: Texture;
 
@@ -52,9 +53,13 @@ export class FillHeatmapStyleLayer extends StyleLayer {
     }
 
     resize() {
-        if (this.heatmapFbo) {
-            this.heatmapFbo.destroy();
-            this.heatmapFbo = null;
+        if (this.heatmapFbo0) {
+            this.heatmapFbo0.destroy();
+            this.heatmapFbo0 = null;
+        }
+        if (this.heatmapFbo1) {
+            this.heatmapFbo1.destroy();
+            this.heatmapFbo1 = null;
         }
     }
 

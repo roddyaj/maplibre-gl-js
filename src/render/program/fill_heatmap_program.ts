@@ -27,6 +27,7 @@ export type FillHeatmapTextureUniformsType = {
     'u_opacity': Uniform1f;
     'u_width': Uniform1f;
     'u_height': Uniform1f;
+    'u_dir': Uniform1f;
 };
 
 const fillHeatmapUniforms = (context: Context, locations: UniformLocations): FillHeatmapUniformsType => ({
@@ -41,7 +42,8 @@ const fillHeatmapTextureUniforms = (context: Context, locations: UniformLocation
     'u_color_ramp': new Uniform1i(context, locations.u_color_ramp),
     'u_opacity': new Uniform1f(context, locations.u_opacity),
     'u_width': new Uniform1f(context, locations.u_width),
-    'u_height': new Uniform1f(context, locations.u_height)
+    'u_height': new Uniform1f(context, locations.u_height),
+    'u_dir': new Uniform1f(context, locations.u_dir)
 });
 
 const fillHeatmapUniformValues = (matrix: mat4, tile: Tile, zoom: number): UniformValues<FillHeatmapUniformsType> => ({
@@ -54,7 +56,8 @@ const fillHeatmapTextureUniformValues = (
     layer: FillHeatmapStyleLayer,
     textureUnit: number,
     colorRampUnit: number,
-    scaleFactor: number
+    scaleFactor: number,
+    dir: number
 ): UniformValues<FillHeatmapTextureUniformsType> => {
     const matrix = mat4.create();
     mat4.ortho(matrix, 0, painter.width, painter.height, 0, 0, 1);
@@ -68,7 +71,8 @@ const fillHeatmapTextureUniformValues = (
         'u_color_ramp': colorRampUnit,
         'u_opacity': layer.paint.get('fill-heatmap-opacity'),
         'u_width': gl.drawingBufferWidth / scaleFactor,
-        'u_height': gl.drawingBufferHeight / scaleFactor
+        'u_height': gl.drawingBufferHeight / scaleFactor,
+        'u_dir': dir
     };
 };
 

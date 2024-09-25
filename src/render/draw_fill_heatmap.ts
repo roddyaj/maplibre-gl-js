@@ -154,9 +154,10 @@ function renderTexture(painter: Painter, layer: FillHeatmapStyleLayer, fboId: nu
     colorRampTexture.bind(gl.LINEAR, gl.CLAMP_TO_EDGE);
     const dir = fboId;
 
+    const limitCount = layer.paint.get('fill-heatmap-limit-count').constantOr(100);
     painter.useProgram('fillHeatmapTexture').draw(context, gl.TRIANGLES,
         DepthMode.disabled, StencilMode.disabled, painter.colorModeForRenderPass(), CullFaceMode.disabled,
-        fillHeatmapTextureUniformValues(painter, layer, 0, 1, scaleFactor, dir), null,
+        fillHeatmapTextureUniformValues(painter, layer, 0, 1, scaleFactor, dir, limitCount), null,
         layer.id, painter.viewportBuffer, painter.quadTriangleIndexBuffer,
         painter.viewportSegments, layer.paint, painter.transform.zoom);
 }

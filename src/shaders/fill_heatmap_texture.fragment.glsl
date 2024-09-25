@@ -1,9 +1,12 @@
+precision highp float;
+
 uniform sampler2D u_image;
 uniform sampler2D u_color_ramp;
 uniform float u_opacity;
 uniform float u_width;
 uniform float u_height;
 uniform float u_dir;
+uniform float u_limit_count;
 
 in vec2 v_pos;
 
@@ -61,7 +64,7 @@ void main() {
     } else {
         // Second pass: blur in the other dimension and map value to color
         if (blurredValue > 0.0) {
-            fragColor = texture(u_color_ramp, vec2(blurredValue, 0.5)) * u_opacity;
+            fragColor = texture(u_color_ramp, vec2(blurredValue / u_limit_count, 0.5)) * u_opacity;
         } else {
             fragColor = vec4(0.0);
         }

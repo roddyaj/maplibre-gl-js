@@ -11,7 +11,7 @@ import puppeteer, {Page, Browser} from 'puppeteer';
 import {CoverageReport} from 'monocart-coverage-reports';
 import {localizeURLs} from '../lib/localize-urls';
 import type {Map, CanvasSource, PointLike, StyleSpecification} from '../../../dist/maplibre-gl';
-import jnuitReportBuilder, {type TestSuite} from 'junit-report-builder';
+import junitReportBuilder, {type TestSuite} from 'junit-report-builder';
 import * as maplibreglModule from '../../../dist/maplibre-gl';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -519,7 +519,7 @@ async function getImageFromStyle(styleForTest: StyleWithTestData, page: Page): P
                         map._render();
                         break;
                     case 'updateFakeCanvas': {
-                        const canvasSource = map.getSource(operation[1]) as CanvasSource;
+                        const canvasSource = map.getSource<CanvasSource>(operation[1]);
                         canvasSource.play();
                         // update before pause should be rendered
                         await updateFakeCanvas(window.document, testData.addFakeCanvas.id, operation[2]);
@@ -700,12 +700,12 @@ function printSpecificStatistics(status: 'passed' | 'failed' | 'errored', subset
  * @returns `true` if all the tests passed
  */
 function printStatistics(stats: TestStats): boolean {
-    const suite = jnuitReportBuilder.testSuite().name('render-tests');
+    const suite = junitReportBuilder.testSuite().name('render-tests');
     printSpecificStatistics('passed', stats.passed, stats.total, suite);
     printSpecificStatistics('failed', stats.failed, stats.total, suite);
     printSpecificStatistics('errored', stats.errored, stats.total, suite);
 
-    jnuitReportBuilder.writeTo('junit.xml');
+    junitReportBuilder.writeTo('junit.xml');
     return (stats.failed.length + stats.errored.length) === 0;
 }
 

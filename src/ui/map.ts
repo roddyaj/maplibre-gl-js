@@ -53,8 +53,10 @@ import type {
     StyleSpecification,
     LightSpecification,
     SourceSpecification,
-    TerrainSpecification
+    TerrainSpecification,
+    SkySpecification
 } from '@maplibre/maplibre-gl-style-spec';
+import type {CanvasSourceSpecification} from '../source/canvas_source';
 import type {MapGeoJSONFeature} from '../util/vectortile_to_geojson';
 import type {ControlPosition, IControl} from './control/control';
 import type {QueryRenderedFeaturesOptions, QuerySourceFeatureOptions} from '../source/query_features';
@@ -288,8 +290,8 @@ export type MapOptions = {
     fitBoundsOptions?: FitBoundsOptions;
     /**
      * Defines a CSS
-     * font-family for locally overriding generation of glyphs in the 'CJK Unified Ideographs', 'Hiragana', 'Katakana' and 'Hangul Syllables' ranges.
-     * In these ranges, font settings from the map's style will be ignored, except for font-weight keywords (light/regular/medium/bold).
+     * font-family for locally overriding generation of Chinese, Japanese, and Korean characters.
+     * For these characters, font settings from the map's style will be ignored, except for font-weight keywords (light/regular/medium/bold).
      * Set to `false`, to enable font settings from the map's style for these glyph ranges.
      * The purpose of this option is to avoid bandwidth-intensive glyph server requests. (See [Use locally generated ideographs](https://maplibre.org/maplibre-gl-js/docs/examples/local-ideographs).)
      * @defaultValue 'sans-serif'
@@ -338,6 +340,14 @@ export type AddImageOptions = {
 
 // This type is used inside map since all properties are assigned a default value.
 export type CompleteMapOptions = Complete<MapOptions>;
+
+type DelegatedListener = {
+    layers: string[];
+    listener: Listener;
+    delegates: {[E in keyof MapEventType]?: Delegate<MapEventType[E]>};
+}
+
+type Delegate<E extends Event = Event> = (e: E) => void;
 
 const defaultMinZoom = -2;
 const defaultMaxZoom = 22;
@@ -462,7 +472,7 @@ export class Map extends Camera {
     _antialias: boolean;
     _refreshExpiredTiles: boolean;
     _hash: Hash;
-    _delegatedListeners: any;
+    _delegatedListeners: Record<string, DelegatedListener[]>;
     _fadeDuration: number;
     _crossSourceCollisions: boolean;
     _crossFadingFactor = 1;
@@ -628,7 +638,8 @@ export class Map extends Camera {
             let initialResizeEventCaptured = false;
             const throttledResizeCallback = throttle((entries: ResizeObserverEntry[]) => {
                 if (this._trackResize && !this._removed) {
-                    this.resize(entries)._update();
+                    this.resize(entries);
+                    this.redraw();
                 }
             }, 50);
             this._resizeObserver = new ResizeObserver((entries) => {
@@ -1204,15 +1215,12 @@ export class Map extends Camera {
         return this._rotating || this.handlers?.isRotating();
     }
 
-    _createDelegatedListener(type: keyof MapEventType | string, layerId: string, listener: Listener): {
-        layer: string;
-        listener: Listener;
-        delegates: {[type in keyof MapEventType]?: (e: any) => void};
-    } {
+    _createDelegatedListener(type: keyof MapEventType | string, layerIds: string[], listener: Listener): DelegatedListener {
         if (type === 'mouseenter' || type === 'mouseover') {
             let mousein = false;
             const mousemove = (e) => {
-                const features = this.getLayer(layerId) ? this.queryRenderedFeatures(e.point, {layers: [layerId]}) : [];
+                const existingLayers = layerIds.filter((layerId) => this.getLayer(layerId));
+                const features = existingLayers.length !== 0 ? this.queryRenderedFeatures(e.point, {layers: existingLayers}) : [];
                 if (!features.length) {
                     mousein = false;
                 } else if (!mousein) {
@@ -1223,11 +1231,12 @@ export class Map extends Camera {
             const mouseout = () => {
                 mousein = false;
             };
-            return {layer: layerId, listener, delegates: {mousemove, mouseout}};
+            return {layers: layerIds, listener, delegates: {mousemove, mouseout}};
         } else if (type === 'mouseleave' || type === 'mouseout') {
             let mousein = false;
             const mousemove = (e) => {
-                const features = this.getLayer(layerId) ? this.queryRenderedFeatures(e.point, {layers: [layerId]}) : [];
+                const existingLayers = layerIds.filter((layerId) => this.getLayer(layerId));
+                const features = existingLayers.length !== 0 ? this.queryRenderedFeatures(e.point, {layers: existingLayers}) : [];
                 if (features.length) {
                     mousein = true;
                 } else if (mousein) {
@@ -1241,10 +1250,11 @@ export class Map extends Camera {
                     listener.call(this, new MapMouseEvent(type, this, e.originalEvent));
                 }
             };
-            return {layer: layerId, listener, delegates: {mousemove, mouseout}};
+            return {layers: layerIds, listener, delegates: {mousemove, mouseout}};
         } else {
             const delegate = (e) => {
-                const features = this.getLayer(layerId) ? this.queryRenderedFeatures(e.point, {layers: [layerId]}) : [];
+                const existingLayers = layerIds.filter((layerId) => this.getLayer(layerId));
+                const features = existingLayers.length !== 0 ? this.queryRenderedFeatures(e.point, {layers: existingLayers}) : [];
                 if (features.length) {
                     // Here we need to mutate the original event, so that preventDefault works as expected.
                     e.features = features;
@@ -1252,13 +1262,41 @@ export class Map extends Camera {
                     delete e.features;
                 }
             };
-            return {layer: layerId, listener, delegates: {[type]: delegate}};
+            return {layers: layerIds, listener, delegates: {[type]: delegate}};
+        }
+    }
+
+    _saveDelegatedListener(type: keyof MapEventType | string, delegatedListener: DelegatedListener): void {
+        this._delegatedListeners = this._delegatedListeners || {};
+        this._delegatedListeners[type] = this._delegatedListeners[type] || [];
+        this._delegatedListeners[type].push(delegatedListener);
+    }
+
+    _removeDelegatedListener(type: string, layerIds: string[], listener: Listener) {
+        if (!this._delegatedListeners || !this._delegatedListeners[type]) {
+            return;
+        }
+
+        const listeners = this._delegatedListeners[type];
+        for (let i = 0; i < listeners.length; i++) {
+            const delegatedListener = listeners[i];
+            if (
+                delegatedListener.listener === listener &&
+                delegatedListener.layers.length === layerIds.length &&
+                delegatedListener.layers.every((layerId: string) => layerIds.includes(layerId))
+            ) {
+                for (const event in delegatedListener.delegates) {
+                    this.off(event, delegatedListener.delegates[event]);
+                }
+                listeners.splice(i, 1);
+                return;
+            }
         }
     }
 
     /**
      * @event
-     * Adds a listener for events of a specified type, optionally limited to features in a specified style layer.
+     * Adds a listener for events of a specified type, optionally limited to features in a specified style layer(s).
      * See {@link MapEventType} and {@link MapLayerEventType} for a full list of events and their description.
      *
      * | Event                  | Compatible with `layerId` |
@@ -1367,6 +1405,18 @@ export class Map extends Camera {
         listener: (ev: MapLayerEventType[T] & Object) => void,
     ): Map;
     /**
+     * Overload of the `on` method that allows to listen to events specifying multiple layers.
+     * @event
+     * @param type - The type of the event.
+     * @param layerIds - The array of style layer IDs.
+     * @param listener - The listener callback.
+     */
+    on<T extends keyof MapLayerEventType>(
+        type: T,
+        layerIds: string[],
+        listener: (ev: MapLayerEventType[T] & Object) => void
+    ): this;
+    /**
      * Overload of the `on` method that allows to listen to events without specifying a layer.
      * @event
      * @param type - The type of the event.
@@ -1380,16 +1430,16 @@ export class Map extends Camera {
      * @param listener - The listener callback.
      */
     on(type: keyof MapEventType | string, listener: Listener): this;
-    on(type: keyof MapEventType | string, layerIdOrListener: string | Listener, listener?: Listener): this {
+    on(type: keyof MapEventType | string, layerIdsOrListener: string | string[] | Listener, listener?: Listener): this {
         if (listener === undefined) {
-            return super.on(type, layerIdOrListener as Listener);
+            return super.on(type, layerIdsOrListener as Listener);
         }
 
-        const delegatedListener = this._createDelegatedListener(type, layerIdOrListener as string, listener);
+        const layerIds = typeof layerIdsOrListener === 'string' ? [layerIdsOrListener] : layerIdsOrListener as string[];
 
-        this._delegatedListeners = this._delegatedListeners || {};
-        this._delegatedListeners[type] = this._delegatedListeners[type] || [];
-        this._delegatedListeners[type].push(delegatedListener);
+        const delegatedListener = this._createDelegatedListener(type, layerIds, listener);
+
+        this._saveDelegatedListener(type, delegatedListener);
 
         for (const event in delegatedListener.delegates) {
             this.on(event, delegatedListener.delegates[event]);
@@ -1420,6 +1470,18 @@ export class Map extends Camera {
         listener?: (ev: MapLayerEventType[T] & Object) => void,
     ): this | Promise<MapLayerEventType[T] & Object>;
     /**
+     * Overload of the `once` method that allows to listen to events specifying multiple layers.
+     * @event
+     * @param type - The type of the event.
+     * @param layerIds - The array of style layer IDs.
+     * @param listener - The listener callback.
+     */
+    once<T extends keyof MapLayerEventType>(
+        type: T,
+        layerIds: string[],
+        listener?: (ev: MapLayerEventType[T] & Object) => void
+    ): this | Promise<any>;
+    /**
      * Overload of the `once` method that allows to listen to events without specifying a layer.
      * @event
      * @param type - The type of the event.
@@ -1433,13 +1495,24 @@ export class Map extends Camera {
      * @param listener - The listener callback.
      */
     once(type: keyof MapEventType | string, listener?: Listener): this | Promise<any>;
-    once(type: keyof MapEventType | string, layerIdOrListener: string | Listener, listener?: Listener): this | Promise<any> {
-
+    once(type: keyof MapEventType | string, layerIdsOrListener: string | string[] | Listener, listener?: Listener): this | Promise<any> {
         if (listener === undefined) {
-            return super.once(type, layerIdOrListener as Listener);
+            return super.once(type, layerIdsOrListener as Listener);
         }
 
-        const delegatedListener = this._createDelegatedListener(type, layerIdOrListener as string, listener);
+        const layerIds = typeof layerIdsOrListener === 'string' ? [layerIdsOrListener] : layerIdsOrListener as string[];
+
+        const delegatedListener = this._createDelegatedListener(type, layerIds, listener);
+
+        for (const key in delegatedListener.delegates) {
+            const delegate: Delegate = delegatedListener.delegates[key];
+            delegatedListener.delegates[key] = (...args: Parameters<Delegate>) => {
+                this._removeDelegatedListener(type, layerIds, listener);
+                delegate(...args);
+            };
+        }
+
+        this._saveDelegatedListener(type, delegatedListener);
 
         for (const event in delegatedListener.delegates) {
             this.once(event, delegatedListener.delegates[event]);
@@ -1462,41 +1535,39 @@ export class Map extends Camera {
         listener: (ev: MapLayerEventType[T] & Object) => void,
     ): this;
     /**
-     * Overload of the `off` method that allows to listen to events without specifying a layer.
+     * Overload of the `off` method that allows to remove an event created with multiple layers.
+     * Provide the same layer IDs as to `on` or `once`, when the listener was registered.
+     * @event
+     * @param type - The type of the event.
+     * @param layers - The layer IDs previously used to install the listener.
+     * @param listener - The function previously installed as a listener.
+     */
+    off<T extends keyof MapLayerEventType>(
+        type: T,
+        layers: string[],
+        listener: (ev: MapLayerEventType[T] & Object) => void,
+    ): this;
+    /**
+     * Overload of the `off` method that allows to remove an event created without specifying a layer.
      * @event
      * @param type - The type of the event.
      * @param listener - The function previously installed as a listener.
      */
     off<T extends keyof MapEventType>(type: T, listener: (ev: MapEventType[T] & Object) => void): this;
     /**
-     * Overload of the `off` method that allows to listen to events without specifying a layer.
+     * Overload of the `off` method that allows to remove an event created without specifying a layer.
      * @event
      * @param type - The type of the event.
      * @param listener - The function previously installed as a listener.
      */
     off(type: keyof MapEventType | string, listener: Listener): this;
-    off(type: keyof MapEventType | string, layerIdOrListener: string | Listener, listener?: Listener): this {
+    off(type: keyof MapEventType | string, layerIdsOrListener: string | string[] | Listener, listener?: Listener): this {
         if (listener === undefined) {
-            return super.off(type, layerIdOrListener as Listener);
+            return super.off(type, layerIdsOrListener as Listener);
         }
 
-        const removeDelegatedListener = (delegatedListeners) => {
-            const listeners = delegatedListeners[type];
-            for (let i = 0; i < listeners.length; i++) {
-                const delegatedListener = listeners[i];
-                if (delegatedListener.layer === layerIdOrListener && delegatedListener.listener === listener) {
-                    for (const event in delegatedListener.delegates) {
-                        this.off(((event as any)), delegatedListener.delegates[event]);
-                    }
-                    listeners.splice(i, 1);
-                    return this;
-                }
-            }
-        };
-
-        if (this._delegatedListeners && this._delegatedListeners[type]) {
-            removeDelegatedListener(this._delegatedListeners);
-        }
+        const layerIds = typeof layerIdsOrListener === 'string' ? [layerIdsOrListener] : layerIdsOrListener as string[];
+        this._removeDelegatedListener(type, layerIds, listener);
 
         return this;
     }
@@ -1861,7 +1932,7 @@ export class Map extends Camera {
      * ```
      * @see GeoJSON source: [Add live realtime data](https://maplibre.org/maplibre-gl-js/docs/examples/live-geojson/)
      */
-    addSource(id: string, source: SourceSpecification): this {
+    addSource(id: string, source: SourceSpecification | CanvasSourceSpecification): this {
         this._lazyInitEmptyStyle();
         this.style.addSource(id, source);
         return this._update(true);
@@ -2020,8 +2091,8 @@ export class Map extends Camera {
      * @see [Animate a point](https://maplibre.org/maplibre-gl-js/docs/examples/animate-point-along-line/)
      * @see [Add live realtime data](https://maplibre.org/maplibre-gl-js/docs/examples/live-geojson/)
      */
-    getSource(id: string): Source | undefined {
-        return this.style.getSource(id);
+    getSource<TSource extends Source>(id: string): TSource | undefined {
+        return this.style.getSource(id) as TSource;
     }
 
     /**
@@ -2662,6 +2733,35 @@ export class Map extends Camera {
     }
 
     /**
+     * Loads sky and fog defined by {@link SkySpecification} onto the map.
+     * Note: The fog only shows when using the terrain 3D feature.
+     * @param sky - Sky properties to set. Must conform to the [MapLibre Style Specification](https://maplibre.org/maplibre-style-spec/sky/).
+     * @returns `this`
+     * @example
+     * ```ts
+     * map.setSky({ 'sky-color': '#00f' });
+     * ```
+     */
+    setSky(sky: SkySpecification) {
+        this._lazyInitEmptyStyle();
+        this.style.setSky(sky);
+        return this._update(true);
+    }
+
+    /**
+     * Returns the value of the sky object.
+     *
+     * @returns the sky properties of the style.
+     * @example
+     * ```ts
+     * map.getSky();
+     * ```
+     */
+    getSky() {
+        return this.style.getSky();
+    }
+
+    /**
      * Sets the `state` of a feature.
      * A feature's `state` is a set of user-defined key-value pairs that are assigned to a feature at runtime.
      * When using this method, the `state` object is merged with any existing key-value pairs in the feature's state.
@@ -3154,7 +3254,7 @@ export class Map extends Camera {
 
         this._resizeObserver?.disconnect();
         const extension = this.painter.context.gl.getExtension('WEBGL_lose_context');
-        if (extension) extension.loseContext();
+        if (extension?.loseContext) extension.loseContext();
         this._canvas.removeEventListener('webglcontextrestored', this._contextRestored, false);
         this._canvas.removeEventListener('webglcontextlost', this._contextLost, false);
         DOM.remove(this._canvasContainer);

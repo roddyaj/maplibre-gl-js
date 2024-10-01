@@ -149,7 +149,7 @@ export function bufferToArrayBuffer(data: Buffer): ArrayBuffer {
  * @returns - a promise that resolves after the specified amount of time
  */
 export const sleep = (milliseconds: number = 0) => {
-    return new Promise(resolve => setTimeout(resolve, milliseconds));
+    return new Promise<void>(resolve => setTimeout(resolve, milliseconds));
 };
 
 export function waitForMetadataEvent(source: Evented): Promise<void> {
@@ -172,7 +172,7 @@ export function createStyleSource() {
     } as SourceSpecification;
 }
 
-export function createStyle() {
+export function createStyle(): StyleSpecification {
     return {
         version: 8,
         center: [-73.9749, 40.7736],
@@ -181,5 +181,5 @@ export function createStyle() {
         pitch: 50,
         sources: {},
         layers: []
-    } as StyleSpecification;
+    };
 }

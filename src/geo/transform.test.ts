@@ -34,6 +34,10 @@ describe('transform', () => {
         expect(transform.scaleZoom(10)).toBe(3.3219280948873626);
         expect(transform.point).toEqual(new Point(262144, 262144));
         expect(transform.height).toBe(500);
+        expect(transform.nearZ).toBe(10);
+        expect(transform.farZ).toBe(804.8028169246645);
+        expect([...transform.projectionMatrix.values()]).toEqual([3, 0, 0, 0, 0, 3, 0, 0, -0, 0, -1.0251635313034058, -1, 0, 0, -20.25163459777832, 0]);
+        expect([...transform.modelViewProjectionMatrix.values()]).toEqual([3, 0, 0, 0, 0, -2.954423259036624, -0.1780177690666898, -0.17364817766693033, 0, 0.006822967915294533, -0.013222891287479163, -0.012898324631281611, -786432, 774484.3308168967, 47414.91102496082, 46270.827886319785]);
         expect(fixedLngLat(transform.pointLocation(new Point(250, 250)))).toEqual({lng: 0, lat: 0});
         expect(fixedCoord(transform.pointCoordinate(new Point(250, 250)))).toEqual({x: 0.5, y: 0.5, z: 0});
         expect(transform.locationPoint(new LngLat(0, 0))).toEqual({x: 250, y: 250});
@@ -102,6 +106,28 @@ describe('transform', () => {
 
         transform.lngRange = [-5, 5];
         transform.latRange = [-5, 5];
+
+        transform.zoom = 0;
+        expect(transform.zoom).toBe(5.1357092861044045);
+
+        transform.center = new LngLat(-50, -30);
+        expect(transform.center).toEqual(new LngLat(0, -0.0063583052861417855));
+
+        transform.zoom = 10;
+        transform.center = new LngLat(-50, -30);
+        expect(transform.center).toEqual(new LngLat(-4.828338623046875, -4.828969771321582));
+    });
+
+    test('lngRange & latRange constrain zoom and center after cloning', () => {
+        const old = new Transform(0, 22, 0, 60, true);
+        old.center = new LngLat(0, 0);
+        old.zoom = 10;
+        old.resize(500, 500);
+
+        old.lngRange = [-5, 5];
+        old.latRange = [-5, 5];
+
+        const transform = old.clone();
 
         transform.zoom = 0;
         expect(transform.zoom).toBe(5.1357092861044045);

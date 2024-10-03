@@ -5,6 +5,7 @@ import {loadSprite} from './load_sprite';
 import {ImageManager} from '../render/image_manager';
 import {GlyphManager} from '../render/glyph_manager';
 import {Light} from './light';
+import {Sky} from './sky';
 import {LineAtlas} from '../render/line_atlas';
 import {clone, extend, deepEqual, filterObject, mapObject} from '../util/util';
 import {coerceSpriteToArray} from '../util/style';
@@ -48,15 +49,17 @@ import type {
     LightSpecification,
     SourceSpecification,
     SpriteSpecification,
-    DiffOperations
+    DiffOperations,
+    SkySpecification
 } from '@maplibre/maplibre-gl-style-spec';
+import type {CanvasSourceSpecification} from '../source/canvas_source';
 import type {CustomLayerInterface} from './style_layer/custom_style_layer';
 import type {Validator} from './validate_style';
 import {
     MessageType,
-    type GetGlyphsParamerters,
+    type GetGlyphsParameters,
     type GetGlyphsResponse,
-    type GetImagesParamerters,
+    type GetImagesParameters,
     type GetImagesResponse
 } from '../util/actor_messages';
 
@@ -89,8 +92,8 @@ export type StyleOptions = {
     validate?: boolean;
     /**
      * Defines a CSS
-     * font-family for locally overriding generation of glyphs in the 'CJK Unified Ideographs', 'Hiragana', 'Katakana' and 'Hangul Syllables' ranges.
-     * In these ranges, font settings from the map's style will be ignored, except for font-weight keywords (light/regular/medium/bold).
+     * font-family for locally overriding generation of Chinese, Japanese, and Korean characters.
+     * For these characters, font settings from the map's style will be ignored, except for font-weight keywords (light/regular/medium/bold).
      * Set to `false`, to enable font settings from the map's style for these glyph ranges.
      * Forces a full update.
      */
@@ -108,14 +111,16 @@ export type StyleSetterOptions = {
 };
 
 /**
- * Part of {@link Map#setStyle} options, transformStyle is a convenience function that allows to modify a style after it is fetched but before it is committed to the map state
- * this function exposes previous and next styles, it can be commonly used to support a range of functionalities like:
- *      when previous style carries certain 'state' that needs to be carried over to a new style gracefully
- *      when a desired style is a certain combination of previous and incoming style
- *      when an incoming style requires modification based on external state
+ * Part of {@link Map#setStyle} options, transformStyle is a convenience function that allows to modify a style after it is fetched but before it is committed to the map state.
  *
- * @param previousStyle - The current style.
- * @param nextStyle - The next style.
+ * This function exposes previous and next styles, it can be commonly used to support a range of functionalities like:
+ *
+ * - when previous style carries certain 'state' that needs to be carried over to a new style gracefully;
+ * - when a desired style is a certain combination of previous and incoming style;
+ * - when an incoming style requires modification based on external state.
+ *
+ * @param previous - The current style.
+ * @param next - The next style.
  * @returns resulting style that will to be applied to the map
  *
  * @example
@@ -184,6 +189,7 @@ export class Style extends Evented {
     glyphManager: GlyphManager;
     lineAtlas: LineAtlas;
     light: Light;
+    sky: Sky;
 
     _frameRequest: AbortController;
     _loadStyleRequest: AbortController;
@@ -287,12 +293,13 @@ export class Style extends Evented {
 
         const request = this.map._requestManager.transformRequest(url, ResourceType.Style);
         this._loadStyleRequest = new AbortController();
+        const abortController = this._loadStyleRequest;
         getJSON<StyleSpecification>(request, this._loadStyleRequest).then((response) => {
             this._loadStyleRequest = null;
             this._load(response.data, options, previousStyle);
         }).catch((error) => {
             this._loadStyleRequest = null;
-            if (error) {
+            if (error && !abortController.signal.aborted) { // ignore abort
                 this.fire(new ErrorEvent(error));
             }
         });
@@ -337,6 +344,7 @@ export class Style extends Evented {
         this._createLayers();
 
         this.light = new Light(this.stylesheet.light);
+        this.sky = new Sky(this.stylesheet.sky);
 
         this.map.setTerrain(this.stylesheet.terrain ?? null);
 
@@ -474,20 +482,22 @@ export class Style extends Evented {
      * @hidden
      * take an array of string IDs, and based on this._layers, generate an array of LayerSpecification
      * @param ids - an array of string IDs, for which serialized layers will be generated. If omitted, all serialized layers will be returned
+     * @param returnClose - if true, return a clone of the layer object
      * @returns generated result
      */
-    private _serializeByIds(ids?: Array<string>): Array<LayerSpecification> {
+    private _serializeByIds(ids: Array<string>, returnClone: boolean = false): Array<LayerSpecification> {
 
         const serializedLayersDictionary = this._serializedAllLayers();
         if (!ids || ids.length === 0) {
-            return Object.values(serializedLayersDictionary);
+            return returnClone ? Object.values(clone(serializedLayersDictionary)) : Object.values(serializedLayersDictionary);
         }
 
         const serializedLayers = [];
         for (const id of ids) {
             // this check will skip all custom layers
             if (serializedLayersDictionary[id]) {
-                serializedLayers.push(serializedLayersDictionary[id]);
+                const toPush = returnClone ? clone(serializedLayersDictionary[id]) : serializedLayersDictionary[id];
+                serializedLayers.push(toPush);
             }
         }
 
@@ -519,6 +529,10 @@ export class Style extends Evented {
 
     hasTransitions() {
         if (this.light && this.light.hasTransition()) {
+            return true;
+        }
+
+        if (this.sky && this.sky.hasTransition()) {
             return true;
         }
 
@@ -580,6 +594,7 @@ export class Style extends Evented {
             }
 
             this.light.updateTransitions(parameters);
+            this.sky.updateTransitions(parameters);
 
             this._resetUpdates();
         }
@@ -624,6 +639,7 @@ export class Style extends Evented {
         }
 
         this.light.recalculate(parameters);
+        this.sky.recalculate(parameters);
         this.z = parameters.zoom;
 
         if (changed) {
@@ -655,7 +671,7 @@ export class Style extends Evented {
 
     _updateWorkerLayers(updatedIds: Array<string>, removedIds: Array<string>) {
         this.dispatcher.broadcast(MessageType.updateLayers, {
-            layers: this._serializeByIds(updatedIds),
+            layers: this._serializeByIds(updatedIds, false),
             removedIds
         });
     }
@@ -762,6 +778,9 @@ export class Style extends Evented {
                 case 'setSprite':
                     operations.push(() => this.setSprite.apply(this, op.args));
                     break;
+                case 'setSky':
+                    operations.push(() => this.setSky.apply(this, op.args));
+                    break;
                 case 'setTerrain':
                     operations.push(() => this.map.setTerrain.apply(this, op.args));
                     break;
@@ -817,7 +836,7 @@ export class Style extends Evented {
         return this.imageManager.listImages();
     }
 
-    addSource(id: string, source: SourceSpecification, options: StyleSetterOptions = {}) {
+    addSource(id: string, source: SourceSpecification | CanvasSourceSpecification, options: StyleSetterOptions = {}) {
         this._checkLoaded();
 
         if (this.sourceCaches[id] !== undefined) {
@@ -1260,7 +1279,7 @@ export class Style extends Evented {
         return extend({duration: 300, delay: 0}, this.stylesheet && this.stylesheet.transition);
     }
 
-    serialize(): StyleSpecification {
+    serialize(): StyleSpecification | undefined {
         // We return undefined before we're loaded, following the pattern of Map.getStyle() before
         // the Style object is initialized.
         // Internally, Style._validate() calls Style.serialize() but callers are responsible for
@@ -1268,7 +1287,7 @@ export class Style extends Evented {
         if (!this._loaded) return;
 
         const sources = mapObject(this.sourceCaches, (source) => source.serialize());
-        const layers = this._serializeByIds(this._order);
+        const layers = this._serializeByIds(this._order, true);
         const terrain = this.map.getTerrain() || undefined;
         const myStyleSheet = this.stylesheet;
 
@@ -1277,6 +1296,7 @@ export class Style extends Evented {
             name: myStyleSheet.name,
             metadata: myStyleSheet.metadata,
             light: myStyleSheet.light,
+            sky: myStyleSheet.sky,
             center: myStyleSheet.center,
             zoom: myStyleSheet.zoom,
             bearing: myStyleSheet.bearing,
@@ -1474,6 +1494,42 @@ export class Style extends Evented {
         this.light.updateTransitions(parameters);
     }
 
+    getSky(): SkySpecification {
+        return this.stylesheet?.sky;
+    }
+
+    setSky(skyOptions?: SkySpecification, options: StyleSetterOptions = {}) {
+        const sky = this.getSky();
+        let update = false;
+        if (!skyOptions && !sky) return;
+
+        if (skyOptions && !sky) {
+            update = true;
+        } else if (!skyOptions && sky) {
+            update = true;
+        } else {
+            for (const key in skyOptions) {
+                if (!deepEqual(skyOptions[key], sky[key])) {
+                    update = true;
+                    break;
+                }
+            }
+        }
+        if (!update) return;
+
+        const parameters = {
+            now: browser.now(),
+            transition: extend({
+                duration: 300,
+                delay: 0
+            }, this.stylesheet.transition)
+        };
+
+        this.stylesheet.sky = skyOptions;
+        this.sky.setSky(skyOptions, options);
+        this.sky.updateTransitions(parameters);
+    }
+
     _validate(validate: Validator, key: string, value: any, props: any, options: {
         validate?: boolean;
     } = {}) {
@@ -1618,7 +1674,7 @@ export class Style extends Evented {
 
     // Callbacks from web workers
 
-    async getImages(mapId: string | number, params: GetImagesParamerters): Promise<GetImagesResponse> {
+    async getImages(mapId: string | number, params: GetImagesParameters): Promise<GetImagesResponse> {
         const images = await this.imageManager.getImages(params.icons);
 
         // Apply queued image changes before setting the tile's dependencies so that the tile
@@ -1638,7 +1694,7 @@ export class Style extends Evented {
         return images;
     }
 
-    async getGlyphs(mapId: string | number, params: GetGlyphsParamerters): Promise<GetGlyphsResponse> {
+    async getGlyphs(mapId: string | number, params: GetGlyphsParameters): Promise<GetGlyphsResponse> {
         const glypgs = await this.glyphManager.getGlyphs(params.stacks);
         const sourceCache = this.sourceCaches[params.source];
         if (sourceCache) {

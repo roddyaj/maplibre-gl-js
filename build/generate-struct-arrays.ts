@@ -234,7 +234,7 @@ function emitStructArrayLayout(locals) {
 
     for (const member of members) {
         output.push(
-            ` * [${member.offset}]: ${member.type}[${member.components}]`);
+            ` * [${member.offset}] - ${member.type}[${member.components}]`);
     }
 
     output.push(

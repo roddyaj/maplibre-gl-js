@@ -5,30 +5,32 @@ import {ImageRequest} from '../util/image_request';
 import {ResourceType} from '../util/request_manager';
 import {Event, ErrorEvent, Evented} from '../util/evented';
 import {loadTileJson} from './load_tilejson';
-import {TileBounds} from './tile_bounds';
+import {TileBounds} from '../tile/tile_bounds';
 import {Texture} from '../render/texture';
 
 import type {Source} from './source';
-import type {OverscaledTileID} from './tile_id';
+import type {OverscaledTileID} from '../tile/tile_id';
 import type {Map} from '../ui/map';
 import type {Dispatcher} from '../util/dispatcher';
-import type {Tile} from './tile';
+import type {Tile} from '../tile/tile';
 import type {
     RasterSourceSpecification,
     RasterDEMSourceSpecification
 } from '@maplibre/maplibre-gl-style-spec';
 
 /**
- * A source containing raster tiles (See the [Style Specification](https://maplibre.org/maplibre-style-spec/) for detailed documentation of options.)
+ * A source containing raster tiles (See the [raster source documentation](https://maplibre.org/maplibre-style-spec/sources/#raster) for detailed documentation of options.)
  *
  * @group Sources
+ *
+ * \> ℹ️ **Note:** The default `tileSize` is `512`. If your tile provider (such as OpenStreetMap or Stadia Maps) serves 256px tiles, set `tileSize: 256` manually to avoid blurry rendering due to upscaling.
  *
  * @example
  * ```ts
  * map.addSource('raster-source', {
  *     'type': 'raster',
  *     'tiles': ['https://tiles.stadiamaps.com/tiles/stamen_watercolor/{z}/{x}/{y}.jpg'],
- *     'tileSize': 256,
+ *     'tileSize': 256, // Set this to match tile server output to avoid blurry rendering
  * });
  * ```
  *
@@ -40,12 +42,12 @@ import type {
  *      'tiles': [
  *          'https://img.nj.gov/imagerywms/Natural2015?bbox={bbox-epsg-3857}&format=image/png&service=WMS&version=1.1.1&request=GetMap&srs=EPSG:3857&transparent=true&width=256&height=256&layers=Natural2015'
  *      ],
- *      'tileSize': 256
+ *      'tileSize': 256 // Important for WMS if tiles are 256px
  * });
  * ```
  * @see [Add a raster tile source](https://maplibre.org/maplibre-gl-js/docs/examples/map-tiles/)
- * @see [Add a WMS source](https://maplibre.org/maplibre-gl-js/docs/examples/wms/)
- * @see [Display a satellite map](https://maplibre.org/maplibre-gl-js/docs/examples/satellite-map/)
+ * @see [Add a WMS source](https://maplibre.org/maplibre-gl-js/docs/examples/add-a-wms-source/)
+ * @see [Display a satellite map](https://maplibre.org/maplibre-gl-js/docs/examples/display-a-satellite-map/)
  */
 export class RasterTileSource extends Evented implements Source {
     type: 'raster' | 'raster-dem';
@@ -85,7 +87,7 @@ export class RasterTileSource extends Evented implements Source {
         extend(this, pick(options, ['url', 'scheme', 'tileSize']));
     }
 
-    async load() {
+    async load(sourceDataChanged: boolean = false) {
         this._loaded = false;
         this.fire(new Event('dataloading', {dataType: 'source'}));
         this._tileJSONRequest = new AbortController();
@@ -97,14 +99,15 @@ export class RasterTileSource extends Evented implements Source {
                 extend(this, tileJSON);
                 if (tileJSON.bounds) this.tileBounds = new TileBounds(tileJSON.bounds, this.minzoom, this.maxzoom);
 
-                // `content` is included here to prevent a race condition where `Style#_updateSources` is called
+                // `content` is included here to prevent a race condition where `Style._updateSources` is called
                 // before the TileJSON arrives. this makes sure the tiles needed are loaded once TileJSON arrives
                 // ref: https://github.com/mapbox/mapbox-gl-js/pull/4347#discussion_r104418088
                 this.fire(new Event('data', {dataType: 'source', sourceDataType: 'metadata'}));
-                this.fire(new Event('data', {dataType: 'source', sourceDataType: 'content'}));
+                this.fire(new Event('data', {dataType: 'source', sourceDataType: 'content', sourceDataChanged}));
             }
         } catch (err) {
             this._tileJSONRequest = null;
+            this._loaded = true; // let's pretend it's loaded so the source will be ignored
             this.fire(new ErrorEvent(err));
         }
     }
@@ -133,7 +136,7 @@ export class RasterTileSource extends Evented implements Source {
 
         callback();
 
-        this.load();
+        this.load(true);
     }
 
     /**
@@ -182,7 +185,7 @@ export class RasterTileSource extends Evented implements Source {
                 return;
             }
             if (response && response.data) {
-                if (this.map._refreshExpiredTiles && response.cacheControl && response.expires) {
+                if (this.map._refreshExpiredTiles && (response.cacheControl || response.expires)) {
                     tile.setExpiryData({cacheControl: response.cacheControl, expires: response.expires});
                 }
                 const context = this.map.painter.context;

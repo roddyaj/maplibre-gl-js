@@ -1,18 +1,19 @@
 import {VectorTileSource} from '../source/vector_tile_source';
 import {RasterTileSource} from '../source/raster_tile_source';
 import {RasterDEMTileSource} from '../source/raster_dem_tile_source';
-import {GeoJSONSource} from '../source/geojson_source';
+import {GeoJSONSource, type GeoJSONSourceShouldReloadTileOptions} from '../source/geojson_source';
 import {VideoSource} from '../source/video_source';
 import {ImageSource} from '../source/image_source';
 import {CanvasSource} from '../source/canvas_source';
-import {Dispatcher} from '../util/dispatcher';
+import {type Dispatcher} from '../util/dispatcher';
 
 import type {SourceSpecification} from '@maplibre/maplibre-gl-style-spec';
 import type {Event, Evented} from '../util/evented';
 import type {Map} from '../ui/map';
-import type {Tile} from './tile';
-import type {OverscaledTileID, CanonicalTileID} from './tile_id';
+import type {Tile} from '../tile/tile';
+import type {OverscaledTileID, CanonicalTileID} from '../tile/tile_id';
 import type {CanvasSourceSpecification} from '../source/canvas_source';
+import {type CalculateTileZoomFunction} from '../geo/projection/covering_tiles';
 
 const registeredSources = {} as {[key:string]: SourceClass};
 
@@ -116,6 +117,16 @@ export interface Source {
      * Allows to execute a prepare step before the source is used.
      */
     prepare?(): void;
+    /**
+     * Optional function to redefine how tiles are loaded at high pitch angles.
+     */
+    calculateTileZoom?: CalculateTileZoomFunction;
+    /**
+     * Optional function to determine whether a tile should be reloaded, given a
+     * set of options associated with a `MapSourceDataChangedEvent`.
+     * @internal
+     */
+    shouldReloadTile?(tile: Tile, options: GeoJSONSourceShouldReloadTileOptions): boolean;
 }
 
 /**
@@ -123,7 +134,7 @@ export interface Source {
  */
 export type SourceClass = {
     new (id: string, specification: SourceSpecification | CanvasSourceSpecification, dispatcher: Dispatcher, eventedParent: Evented): Source;
-}
+};
 
 /**
  * Creates a tiled data source instance given an options object.
@@ -173,7 +184,7 @@ const setSourceType = (name: string, type: SourceClass) => {
 };
 
 /**
- * Adds a custom source type, making it available for use with {@link Map#addSource}.
+ * Adds a custom source type, making it available for use with {@link Map.addSource}.
  * @param name - The name of the source type; source definition objects use this name in the `{type: ...}` field.
  * @param SourceType - A {@link SourceClass} - which is a constructor for the `Source` interface.
  * @returns a promise that is resolved when the source type is ready or rejected with an error.

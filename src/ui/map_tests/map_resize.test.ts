@@ -1,3 +1,5 @@
+import {describe, beforeEach, test, expect, vi} from 'vitest';
+import {MercatorProjection} from '../../geo/projection/mercator_projection';
 import {createMap, beforeMapTest, sleep} from '../../util/test/util';
 
 beforeEach(() => {
@@ -5,7 +7,7 @@ beforeEach(() => {
     global.fetch = null;
 });
 
-describe('#resize', () => {
+describe('resize', () => {
     test('sets width and height from container clients', () => {
         const map = createMap(),
             container = map.getContainer();
@@ -35,10 +37,10 @@ describe('#resize', () => {
     });
 
     test('listen to window resize event', () => {
-        const spy = jest.fn();
-        global.ResizeObserver = jest.fn().mockImplementation(() => ({
-            observe: spy
-        }));
+        const spy = vi.fn();
+        global.ResizeObserver = vi.fn(class {
+            observe = spy;
+        }) as any;
 
         createMap();
 
@@ -47,15 +49,16 @@ describe('#resize', () => {
 
     test('do not resize if trackResize is false', () => {
         let observerCallback: Function = null;
-        global.ResizeObserver = jest.fn().mockImplementation((c) => ({
-            observe: () => { observerCallback = c; }
-        }));
+        global.ResizeObserver = vi.fn(class {
+            constructor(c) { observerCallback = c; }
+            observe = () => { };
+        }) as any;
 
         const map = createMap({trackResize: false});
 
-        const spyA = jest.spyOn(map, 'stop');
-        const spyB = jest.spyOn(map, '_update');
-        const spyC = jest.spyOn(map, 'resize');
+        const spyA = vi.spyOn(map, 'stop');
+        const spyB = vi.spyOn(map, '_update');
+        const spyC = vi.spyOn(map, 'resize');
 
         observerCallback();
 
@@ -66,15 +69,17 @@ describe('#resize', () => {
 
     test('do resize if trackResize is true (default)', async () => {
         let observerCallback: Function = null;
-        global.ResizeObserver = jest.fn().mockImplementation((c) => ({
-            observe: () => { observerCallback = c; }
-        }));
+        global.ResizeObserver = vi.fn(class {
+            constructor(c) { observerCallback = c; }
+            observe = () => { };
+        }) as any;
 
         const map = createMap();
 
-        const resizeSpy = jest.spyOn(map, 'resize');
-        const redrawSpy = jest.spyOn(map, 'redraw');
-        const renderSpy = jest.spyOn(map, '_render');
+        map.style.projection = new MercatorProjection();
+        const resizeSpy = vi.spyOn(map, 'resize');
+        const redrawSpy = vi.spyOn(map, 'redraw');
+        const renderSpy = vi.spyOn(map, '_render');
 
         // The initial "observe" event fired by ResizeObserver should be captured/muted
         // in the map constructor

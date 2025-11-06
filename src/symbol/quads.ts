@@ -10,7 +10,7 @@ import type {SymbolStyleLayer} from '../style/style_layer/symbol_style_layer';
 import type {Feature} from '@maplibre/maplibre-gl-style-spec';
 import type {StyleImage} from '../style/style_image';
 import ONE_EM from './one_em';
-import {Rect} from '../render/glyph_atlas';
+import {type Rect} from '../render/glyph_atlas';
 
 /**
  * A textured quad for rendering a single icon or glyph.
@@ -139,7 +139,7 @@ export function getIconQuads(
         if (angle) {
             const sin = Math.sin(angle),
                 cos = Math.cos(angle),
-                matrix = [cos, -sin, sin, cos];
+                matrix = [cos, -sin, sin, cos] as [number, number, number, number];
 
             tl._matMult(matrix);
             tr._matMult(matrix);
@@ -329,7 +329,7 @@ export function getGlyphQuads(
             if (textRotate) {
                 const sin = Math.sin(textRotate),
                     cos = Math.cos(textRotate),
-                    matrix = [cos, -sin, sin, cos];
+                    matrix = [cos, -sin, sin, cos] as [number, number, number, number];
 
                 tl._matMult(matrix);
                 tr._matMult(matrix);

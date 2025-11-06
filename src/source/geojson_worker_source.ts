@@ -1,8 +1,8 @@
 import {getJSON} from '../util/ajax';
 import {RequestPerformance} from '../util/performance';
 import rewind from '@mapbox/geojson-rewind';
-import {GeoJSONWrapper} from './geojson_wrapper';
-import vtpbf from 'vt-pbf';
+import {fromVectorTileJs, GeoJSONWrapper} from '@maplibre/vt-pbf';
+import {EXTENT} from '../data/extent';
 import Supercluster, {type Options as SuperclusterOptions, type ClusterProperties} from 'supercluster';
 import geojsonvt, {type Options as GeoJSONVTOptions} from 'geojson-vt';
 import {VectorTileWorkerSource} from './vector_tile_worker_source';
@@ -16,8 +16,10 @@ import type {
 
 import type {LoadVectorTileResult} from './vector_tile_worker_source';
 import type {RequestParameters} from '../util/ajax';
-import {isUpdateableGeoJSON, type GeoJSONSourceDiff, applySourceDiff, toUpdateable, GeoJSONFeatureId} from './geojson_source_diff';
+import {isUpdateableGeoJSON, type GeoJSONSourceDiff, applySourceDiff, toUpdateable, type GeoJSONFeatureId} from './geojson_source_diff';
 import type {ClusterIDAndSource, GeoJSONWorkerSourceLoadDataResult, RemoveSourceParams} from '../util/actor_messages';
+import type {IActor} from '../util/actor';
+import type {StyleLayerIndex} from '../style/style_layer_index';
 
 /**
  * The geojson worker options that can be passed to the worker
@@ -31,7 +33,7 @@ export type GeoJSONWorkerOptions = {
     filter?: Array<unknown>;
     promoteId?: string;
     collectResourceTiming?: boolean;
-}
+};
 
 /**
  * Parameters needed to load a geojson to the worker
@@ -68,6 +70,12 @@ export class GeoJSONWorkerSource extends VectorTileWorkerSource {
     _pendingRequest: AbortController;
     _geoJSONIndex: GeoJSONIndex;
     _dataUpdateable = new Map<GeoJSONFeatureId, GeoJSON.Feature>();
+    _createGeoJSONIndex: typeof createGeoJSONIndex;
+
+    constructor(actor: IActor, layerIndex: StyleLayerIndex, availableImages: Array<string>, createGeoJSONIndexFunc: typeof createGeoJSONIndex = createGeoJSONIndex) {
+        super(actor, layerIndex, availableImages);
+        this._createGeoJSONIndex = createGeoJSONIndexFunc;
+    }
 
     override async loadVectorTile(params: WorkerTileParameters, _abortController: AbortController): Promise<LoadVectorTileResult | null> {
         const canonical = params.tileID.canonical;
@@ -81,11 +89,11 @@ export class GeoJSONWorkerSource extends VectorTileWorkerSource {
             return null;
         }
 
-        const geojsonWrapper = new GeoJSONWrapper(geoJSONTile.features);
-        // Encode the geojson-vt tile into binary vector tile form.  This
-        // is a convenience that allows `FeatureIndex` to operate the same way
+        const geojsonWrapper = new GeoJSONWrapper(geoJSONTile.features, {version: 2, extent: EXTENT});
+        // Encode the geojson-vt tile into binary vector tile form.
+        // This is a convenience that allows `FeatureIndex` to operate the same way
         // across `VectorTileSource` and `GeoJSONSource` data.
-        let pbf = vtpbf(geojsonWrapper);
+        let pbf = fromVectorTileJs(geojsonWrapper);
         if (pbf.byteOffset !== 0 || pbf.byteLength !== pbf.buffer.byteLength) {
             // Compatibility with node Buffer (https://github.com/mapbox/pbf/issues/35)
             pbf = new Uint8Array(pbf);
@@ -99,10 +107,13 @@ export class GeoJSONWorkerSource extends VectorTileWorkerSource {
 
     /**
      * Fetches (if appropriate), parses, and index geojson data into tiles. This
-     * preparatory method must be called before {@link GeoJSONWorkerSource#loadTile}
-     * can correctly serve up tiles.
+     * preparatory method must be called before {@link GeoJSONWorkerSource.loadTile}
+     * can correctly serve up tiles. The first call to this method must contain a valid
+     * {@link params.data}, {@link params.request}, or {@link params.dataDiff}. Subsequent
+     * calls may omit these parameters to reprocess the existing data (such as to update
+     * clustering options).
      *
-     * Defers to {@link GeoJSONWorkerSource#loadAndProcessGeoJSON} for the pre-processing.
+     * Defers to {@link GeoJSONWorkerSource.loadAndProcessGeoJSON} for the pre-processing.
      *
      * When a `loadData` request comes in while a previous one is being processed,
      * the previous one is aborted.
@@ -117,15 +128,19 @@ export class GeoJSONWorkerSource extends VectorTileWorkerSource {
 
         this._pendingRequest = new AbortController();
         try {
-            this._pendingData = this.loadAndProcessGeoJSON(params, this._pendingRequest);
+            // Load and process data if no data has been loaded previously, or if there is
+            // a new request, data, or dataDiff to process.
+            if (!this._pendingData || params.request || params.data || params.dataDiff) {
+                this._pendingData = this.loadAndProcessGeoJSON(params, this._pendingRequest);
+            }
 
-            this._geoJSONIndex = params.cluster ?
-                new Supercluster(getSuperclusterOptions(params)).load((await this._pendingData as any).features) :
-                geojsonvt(await this._pendingData, params.geojsonVtOptions);
+            const data = await this._pendingData;
+
+            this._geoJSONIndex = this._createGeoJSONIndex(data, params);
 
             this.loaded = {};
 
-            const result = {} as GeoJSONWorkerSourceLoadDataResult;
+            const result = {data} as GeoJSONWorkerSourceLoadDataResult;
             if (perf) {
                 const resourceTimingData = perf.finish();
                 // it's necessary to eval the result of getEntriesByName() here via parse/stringify
@@ -155,7 +170,7 @@ export class GeoJSONWorkerSource extends VectorTileWorkerSource {
     }
 
     /**
-    * Implements {@link WorkerSource#reloadTile}.
+    * Implements {@link WorkerSource.reloadTile}.
     *
     * If the tile is loaded, uses the implementation in VectorTileWorkerSource.
     * Otherwise, such as after a setData() call, we load the tile fresh.
@@ -177,7 +192,7 @@ export class GeoJSONWorkerSource extends VectorTileWorkerSource {
     /**
      * Fetch, parse and process GeoJSON according to the given params.
      *
-     * Defers to {@link GeoJSONWorkerSource#loadGeoJSON} for the fetching and parsing.
+     * Defers to {@link GeoJSONWorkerSource.loadGeoJSON} for the fetching and parsing.
      *
      * @param params - the parameters
      * @param abortController - the abort controller that allows aborting this operation
@@ -226,7 +241,7 @@ export class GeoJSONWorkerSource extends VectorTileWorkerSource {
                 const parsed = JSON.parse(params.data);
                 this._dataUpdateable = isUpdateableGeoJSON(parsed, promoteId) ? toUpdateable(parsed, promoteId) : undefined;
                 return parsed;
-            } catch (e) {
+            } catch {
                 throw new Error(`Input data given to '${params.source}' is not a valid GeoJSON object.`);
             }
         }
@@ -261,6 +276,11 @@ export class GeoJSONWorkerSource extends VectorTileWorkerSource {
     }): Array<GeoJSON.Feature> {
         return (this._geoJSONIndex as Supercluster).getLeaves(params.clusterId, params.limit, params.offset);
     }
+}
+
+export function createGeoJSONIndex(data: GeoJSON.GeoJSON, params: LoadGeoJSONParameters): GeoJSONIndex {
+    return params.cluster ? new Supercluster(getSuperclusterOptions(params)).load((data as any).features) :
+        geojsonvt(data, params.geojsonVtOptions);
 }
 
 function getSuperclusterOptions({superclusterOptions, clusterProperties}: LoadGeoJSONParameters) {

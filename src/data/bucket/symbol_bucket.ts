@@ -27,19 +27,18 @@ import {allowsVerticalWritingMode, stringContainsRTLText} from '../../util/scrip
 import {WritingMode} from '../../symbol/shaping';
 import {loadGeometry} from '../load_geometry';
 import {toEvaluationFeature} from '../evaluation_feature';
-import mvt from '@mapbox/vector-tile';
-const vectorTileFeatureTypes = mvt.VectorTileFeature.types;
+import {VectorTileFeature} from '@mapbox/vector-tile';
 import {verticalizedCharacterMap} from '../../util/verticalize_punctuation';
-import {Anchor} from '../../symbol/anchor';
+import {type Anchor} from '../../symbol/anchor';
 import {getSizeData, MAX_PACKED_SIZE} from '../../symbol/symbol_size';
 
 import {register} from '../../util/web_worker_transfer';
 import {EvaluationParameters} from '../../style/evaluation_parameters';
 import {Formatted, ResolvedImage} from '@maplibre/maplibre-gl-style-spec';
 import {rtlWorkerPlugin} from '../../source/rtl_text_plugin_worker';
-import {mat4} from 'gl-matrix';
 import {getOverlapMode} from '../../style/style_layer/overlap_mode';
-import type {CanonicalTileID} from '../../source/tile_id';
+import {isSafari} from '../../util/util';
+import type {CanonicalTileID} from '../../tile/tile_id';
 import type {
     Bucket,
     BucketParameters,
@@ -278,12 +277,12 @@ register('CollisionBuffers', CollisionBuffers);
 
 /**
  * @internal
- * Unlike other buckets, which simply implement #addFeature with type-specific
+ * Unlike other buckets, which simply implement `addFeature` with type-specific
  * logic for (essentially) triangulating feature geometries, SymbolBucket
  * requires specialized behavior:
  *
- * 1. WorkerTile#parse(), the logical owner of the bucket creation process,
- *    calls SymbolBucket#populate(), which resolves text and icon tokens on
+ * 1. WorkerTile.parse(), the logical owner of the bucket creation process,
+ *    calls SymbolBucket.populate(), which resolves text and icon tokens on
  *    each feature, adds each glyphs and symbols needed to the passed-in
  *    collections options.glyphDependencies and options.iconDependencies, and
  *    stores the feature data for use in subsequent step (this.features).
@@ -325,7 +324,7 @@ export class SymbolBucket implements Bucket {
     iconsNeedLinear: boolean;
     bucketInstanceId: number;
     justReloaded: boolean;
-    hasPattern: boolean;
+    hasDependencies: boolean;
 
     textSizeData: SizeData;
     iconSizeData: SizeData;
@@ -348,8 +347,6 @@ export class SymbolBucket implements Bucket {
     featureSortOrder: Array<number>;
 
     collisionCircleArray: Array<number>;
-    placementInvProjMatrix: mat4;
-    placementViewportMatrix: mat4;
 
     text: SymbolBuffers;
     icon: SymbolBuffers;
@@ -366,19 +363,17 @@ export class SymbolBucket implements Bucket {
     constructor(options: BucketParameters<SymbolStyleLayer>) {
         this.collisionBoxArray = options.collisionBoxArray;
         this.zoom = options.zoom;
-        this.overscaling = options.overscaling;
+        this.overscaling = isSafari(globalThis) ? Math.min(options.overscaling, 128) : options.overscaling;
         this.layers = options.layers;
         this.layerIds = this.layers.map(layer => layer.id);
         this.index = options.index;
         this.pixelRatio = options.pixelRatio;
         this.sourceLayerIndex = options.sourceLayerIndex;
-        this.hasPattern = false;
+        this.hasDependencies = false;
         this.hasRTLText = false;
         this.sortKeyRanges = [];
 
         this.collisionCircleArray = [];
-        this.placementInvProjMatrix = mat4.identity([] as any);
-        this.placementViewportMatrix = mat4.identity([] as any);
 
         const layer = this.layers[0];
         const unevaluatedLayoutValues = layer._unevaluatedLayout._values;
@@ -522,7 +517,7 @@ export class SymbolBucket implements Bucket {
                 sourceLayerIndex,
                 geometry: evaluationFeature.geometry,
                 properties: feature.properties,
-                type: vectorTileFeatureTypes[feature.type],
+                type: VectorTileFeature.types[feature.type],
                 sortKey
             };
             this.features.push(symbolFeature);
@@ -565,8 +560,12 @@ export class SymbolBucket implements Bucket {
 
     update(states: FeatureStates, vtLayer: VectorTileLayer, imagePositions: {[_: string]: ImagePosition}) {
         if (!this.stateDependentLayers.length) return;
-        this.text.programConfigurations.updatePaintArrays(states, vtLayer, this.layers, imagePositions);
-        this.icon.programConfigurations.updatePaintArrays(states, vtLayer, this.layers, imagePositions);
+        this.text.programConfigurations.updatePaintArrays(states, vtLayer, this.layers, {
+            imagePositions
+        });
+        this.icon.programConfigurations.updatePaintArrays(states, vtLayer, this.layers, {
+            imagePositions
+        });
     }
 
     isEmpty() {
@@ -603,7 +602,7 @@ export class SymbolBucket implements Bucket {
         }
     }
 
-    addToLineVertexArray(anchor: Anchor, line: any) {
+    addToLineVertexArray(anchor: Anchor, line: Array<Point>) {
         const lineStartIndex = this.lineVertexArray.length;
         if (anchor.segment !== undefined) {
             let sumForwardLength = anchor.dist(line[anchor.segment + 1]);
@@ -667,7 +666,7 @@ export class SymbolBucket implements Bucket {
 
             addDynamicAttributes(arrays.dynamicLayoutVertexArray, labelAnchor, angle);
 
-            indexArray.emplaceBack(index, index + 1, index + 2);
+            indexArray.emplaceBack(index, index + 2, index + 1);
             indexArray.emplaceBack(index + 1, index + 2, index + 3);
 
             segment.vertexLength += 4;
@@ -676,7 +675,7 @@ export class SymbolBucket implements Bucket {
             this.glyphOffsetArray.emplaceBack(glyphOffset[0]);
 
             if (i === quads.length - 1 || sectionIndex !== quads[i + 1].sectionIndex) {
-                arrays.programConfigurations.populatePaintArrays(layoutVertexArray.length, feature, feature.index, {}, canonical, sections && sections[sectionIndex]);
+                arrays.programConfigurations.populatePaintArrays(layoutVertexArray.length, feature, feature.index, {imagePositions: {}, canonical, formattedSection: sections && sections[sectionIndex]});
             }
         }
 
@@ -859,7 +858,7 @@ export class SymbolBucket implements Bucket {
 
         const endIndex = placedSymbol.vertexStartIndex + placedSymbol.numGlyphs * 4;
         for (let vertexIndex = placedSymbol.vertexStartIndex; vertexIndex < endIndex; vertexIndex += 4) {
-            iconOrText.indexArray.emplaceBack(vertexIndex, vertexIndex + 1, vertexIndex + 2);
+            iconOrText.indexArray.emplaceBack(vertexIndex, vertexIndex + 2, vertexIndex + 1);
             iconOrText.indexArray.emplaceBack(vertexIndex + 1, vertexIndex + 2, vertexIndex + 3);
         }
     }

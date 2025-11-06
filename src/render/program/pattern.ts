@@ -1,17 +1,17 @@
 import {
-    Uniform1i,
-    Uniform1f,
-    Uniform2f,
-    Uniform3f
+    type Uniform1i,
+    type Uniform1f,
+    type Uniform2f,
+    type Uniform3f
 } from '../uniform_binding';
 import {pixelsToTileUnits} from '../../source/pixels_to_tile_units';
 
 import type {Painter} from '../painter';
-import type {OverscaledTileID} from '../../source/tile_id';
+import type {OverscaledTileID} from '../../tile/tile_id';
 import type {CrossFaded} from '../../style/properties';
 import type {CrossfadeParameters} from '../../style/evaluation_parameters';
 import type {UniformValues} from '../uniform_binding';
-import type {Tile} from '../../source/tile';
+import type {Tile} from '../../tile/tile';
 import type {ResolvedImage} from '@maplibre/maplibre-gl-style-spec';
 
 type BackgroundPatternUniformsType = {

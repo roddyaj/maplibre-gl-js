@@ -1,18 +1,17 @@
-import fs from 'fs';
-import path from 'path';
-import Protobuf from 'pbf';
-import {VectorTile} from '@mapbox/vector-tile';
+import {beforeAll, describe, test, expect, vi} from 'vitest';
 import Point from '@mapbox/point-geometry';
 import {SegmentVector} from '../segment';
 import {LineBucket} from './line_bucket';
 import {LineStyleLayer} from '../../style/style_layer/line_style_layer';
-import {LayerSpecification} from '@maplibre/maplibre-gl-style-spec';
-import {EvaluationParameters} from '../../style/evaluation_parameters';
-import {BucketFeature, BucketParameters} from '../bucket';
+import {type LayerSpecification} from '@maplibre/maplibre-gl-style-spec';
+import {type EvaluationParameters} from '../../style/evaluation_parameters';
+import {type ZoomHistory} from '../../../src/style/zoom_history';
+import {type BucketFeature, type BucketParameters} from '../bucket';
+import {SubdivisionGranularitySetting} from '../../render/subdivision_granularity_settings';
+import {type CreateBucketParameters, createPopulateOptions, getFeaturesFromLayer, loadVectorTile} from '../../../test/unit/lib/tile';
+import {type VectorTileLayer} from '@mapbox/vector-tile';
 
-// Load a line feature from fixture tile.
-const vt = new VectorTile(new Protobuf(fs.readFileSync(path.resolve(__dirname, '../../../test/unit/assets/mbsv5-6-18-23.vector.pbf'))));
-const feature = vt.layers.road.feature(0);
+const {noSubdivision} = SubdivisionGranularitySetting;
 
 function createLine(numPoints) {
     const points = [];
@@ -22,13 +21,30 @@ function createLine(numPoints) {
     return points;
 }
 
+function createLineBucket({id, layout, paint, globalState, availableImages}: CreateBucketParameters): LineBucket {
+    const layer = new LineStyleLayer({
+        id,
+        type: 'line',
+        layout,
+        paint
+    } as LayerSpecification, globalState);
+    layer.recalculate({zoom: 0, zoomHistory: {} as ZoomHistory} as EvaluationParameters,
+        availableImages as Array<string>);
+
+    return new LineBucket({layers: [layer]} as BucketParameters<LineStyleLayer>);
+}
+
 describe('LineBucket', () => {
+    let sourceLayer: VectorTileLayer;
+    beforeAll(() => {
+        // Load line features from fixture tile.
+        sourceLayer = loadVectorTile().layers.road;
+    });
     test('LineBucket', () => {
         expect(() => {
-            const layer = new LineStyleLayer({id: 'test', type: 'line'} as LayerSpecification);
-            layer.recalculate({zoom: 0, zoomHistory: {}} as EvaluationParameters, undefined);
-
-            const bucket = new LineBucket({layers: [layer]} as BucketParameters<LineStyleLayer>);
+            const bucket = createLineBucket({
+                id: 'test'
+            });
 
             const line = {
                 type: 2,
@@ -42,82 +58,82 @@ describe('LineBucket', () => {
 
             bucket.addLine([
                 new Point(0, 0)
-            ], line, undefined, undefined, undefined, undefined);
+            ], line, undefined, undefined, undefined, undefined, undefined, noSubdivision);
 
             bucket.addLine([
                 new Point(0, 0)
-            ], polygon, undefined, undefined, undefined, undefined);
-
-            bucket.addLine([
-                new Point(0, 0),
-                new Point(0, 0)
-            ], line, undefined, undefined, undefined, undefined);
+            ], polygon, undefined, undefined, undefined, undefined, undefined, noSubdivision);
 
             bucket.addLine([
                 new Point(0, 0),
                 new Point(0, 0)
-            ], polygon, undefined, undefined, undefined, undefined);
+            ], line, undefined, undefined, undefined, undefined, undefined, noSubdivision);
 
             bucket.addLine([
                 new Point(0, 0),
-                new Point(10, 10),
                 new Point(0, 0)
-            ], line, undefined, undefined, undefined, undefined);
+            ], polygon, undefined, undefined, undefined, undefined, undefined, noSubdivision);
 
             bucket.addLine([
                 new Point(0, 0),
                 new Point(10, 10),
                 new Point(0, 0)
-            ], polygon, undefined, undefined, undefined, undefined);
+            ], line, undefined, undefined, undefined, undefined, undefined, noSubdivision);
 
             bucket.addLine([
                 new Point(0, 0),
                 new Point(10, 10),
-                new Point(10, 20)
-            ], line, undefined, undefined, undefined, undefined);
+                new Point(0, 0)
+            ], polygon, undefined, undefined, undefined, undefined, undefined, noSubdivision);
 
             bucket.addLine([
                 new Point(0, 0),
                 new Point(10, 10),
                 new Point(10, 20)
-            ], polygon, undefined, undefined, undefined, undefined);
+            ], line, undefined, undefined, undefined, undefined, undefined, noSubdivision);
+
+            bucket.addLine([
+                new Point(0, 0),
+                new Point(10, 10),
+                new Point(10, 20)
+            ], polygon, undefined, undefined, undefined, undefined, undefined, noSubdivision);
 
             bucket.addLine([
                 new Point(0, 0),
                 new Point(10, 10),
                 new Point(10, 20),
                 new Point(0, 0)
-            ], line, undefined, undefined, undefined, undefined);
+            ], line, undefined, undefined, undefined, undefined, undefined, noSubdivision);
 
             bucket.addLine([
                 new Point(0, 0),
                 new Point(10, 10),
                 new Point(10, 20),
                 new Point(0, 0)
-            ], polygon, undefined, undefined, undefined, undefined);
+            ], polygon, undefined, undefined, undefined, undefined, undefined, noSubdivision);
 
-            bucket.addFeature(feature as any, feature.loadGeometry(), undefined, undefined, undefined);
+            const feature = sourceLayer.feature(0);
+            bucket.addFeature(feature as any, feature.loadGeometry(), undefined, undefined, undefined, undefined, noSubdivision);
         }).not.toThrow();
     });
 
     test('LineBucket segmentation', () => {
-        jest.spyOn(console, 'warn').mockImplementation(() => { });
+        vi.spyOn(console, 'warn').mockImplementation(() => { });
 
         // Stub MAX_VERTEX_ARRAY_LENGTH so we can test features
         // breaking across array groups without tests taking a _long_ time.
         SegmentVector.MAX_VERTEX_ARRAY_LENGTH = 256;
 
-        const layer = new LineStyleLayer({id: 'test', type: 'line'} as LayerSpecification);
-        layer.recalculate({zoom: 0, zoomHistory: {}} as EvaluationParameters, undefined);
-
-        const bucket = new LineBucket({layers: [layer]} as BucketParameters<LineStyleLayer>);
+        const bucket = createLineBucket({
+            id: 'test'
+        });
 
         // first add an initial, small feature to make sure the next one starts at
         // a non-zero offset
-        bucket.addFeature({} as BucketFeature, [createLine(10)], undefined, undefined, undefined);
+        bucket.addFeature({} as BucketFeature, [createLine(10)], undefined, undefined, undefined, undefined, noSubdivision);
 
         // add a feature that will break across the group boundary
-        bucket.addFeature({} as BucketFeature, [createLine(128)], undefined, undefined, undefined);
+        bucket.addFeature({} as BucketFeature, [createLine(128)], undefined, undefined, undefined, undefined, noSubdivision);
 
         // Each polygon must fit entirely within a segment, so we expect the
         // first segment to include the first feature and the first polygon
@@ -127,16 +143,49 @@ describe('LineBucket', () => {
         expect(bucket.segments.get()).toEqual([{
             vertexOffset: 0,
             vertexLength: 20,
+            vaos: {},
             primitiveOffset: 0,
             primitiveLength: 18
         }, {
             vertexOffset: 20,
             vertexLength: 256,
+            vaos: {},
             primitiveOffset: 18,
             primitiveLength: 254
         }]);
 
         expect(console.warn).toHaveBeenCalledTimes(1);
 
+    });
+
+    test('LineBucket line-pattern with global-state', () => {
+        const availableImages = [];
+        const bucket = createLineBucket({id: 'test',
+            paint: {'line-pattern': ['coalesce', ['get', 'pattern'], ['global-state', 'pattern']]},
+            globalState: {pattern: 'test-pattern'},
+            availableImages
+        });
+
+        bucket.populate(getFeaturesFromLayer(sourceLayer), createPopulateOptions(availableImages), undefined);
+
+        expect(bucket.patternFeatures.length).toBeGreaterThan(0);
+        expect(bucket.patternFeatures[0].patterns).toEqual({
+            test: {min: 'test-pattern', mid: 'test-pattern', max: 'test-pattern'}
+        });
+    });
+
+    test('LineBucket line-dasharray with global-state', () => {
+        const bucket = createLineBucket({id: 'test',
+            paint: {'line-dasharray': ['coalesce', ['get', 'dasharray'], ['global-state', 'dasharray']]},
+            globalState: {'dasharray': [3, 3]},
+            availableImages: []
+        });
+
+        bucket.populate(getFeaturesFromLayer(sourceLayer), createPopulateOptions([]), undefined);
+
+        expect(bucket.patternFeatures.length).toBeGreaterThan(0);
+        expect(bucket.patternFeatures[0].dashes).toEqual({
+            test: {min: '3,3,false', mid: '3,3,false', max: '3,3,false'}
+        });
     });
 });

@@ -1,6 +1,6 @@
 import {extend} from '../util/util';
 import {Event, Evented} from '../util/evented';
-import {MapMouseEvent} from '../ui/events';
+import {type MapMouseEvent} from './events';
 import {DOM} from '../util/dom';
 import {LngLat} from '../geo/lng_lat';
 import Point from '@mapbox/point-geometry';
@@ -18,15 +18,16 @@ const defaultOptions = {
     focusAfterOpen: true,
     className: '',
     maxWidth: '240px',
-    subpixelPositioning: false
+    subpixelPositioning: false,
+    locationOccludedOpacity: undefined,
 };
 
 /**
  * A pixel offset specified as:
  *
- * - a single number specifying a distance from the location
- * - a {@link PointLike} specifying a constant offset
- * - an object of {@link Point}s specifying an offset for each anchor position
+ * - A single number specifying a distance from the location
+ * - A {@link PointLike} specifying a constant offset
+ * - An object of {@link PointLike}s specifying an offset for each anchor position
  *
  * Negative offsets indicate left and up.
  */
@@ -60,7 +61,7 @@ export type PopupOptions = {
     focusAfterOpen?: boolean;
     /**
      * A string indicating the part of the Popup that should
-     * be positioned closest to the coordinate set via {@link Popup#setLngLat}.
+     * be positioned closest to the coordinate set via {@link Popup.setLngLat}.
      * Options are `'center'`, `'top'`, `'bottom'`, `'left'`, `'right'`, `'top-left'`,
      * `'top-right'`, `'bottom-left'`, and `'bottom-right'`. If unset the anchor will be
      * dynamically set to ensure the popup falls within the map container with a preference
@@ -88,6 +89,12 @@ export type PopupOptions = {
      * @defaultValue false
      */
     subpixelPositioning?: boolean;
+    /**
+     * Optional opacity when the location is behind the globe.
+     * Note that if a number is provided, it will be converted to a string.
+     * @defaultValue undefined
+     */
+    locationOccludedOpacity?: number | string;
 };
 
 const focusQuerySelector = [
@@ -147,10 +154,10 @@ const focusQuerySelector = [
  *   .setMaxWidth("300px")
  *   .addTo(map);
  * ```
- * @see [Display a popup](https://maplibre.org/maplibre-gl-js/docs/examples/popup/)
- * @see [Display a popup on hover](https://maplibre.org/maplibre-gl-js/docs/examples/popup-on-hover/)
- * @see [Display a popup on click](https://maplibre.org/maplibre-gl-js/docs/examples/popup-on-click/)
- * @see [Attach a popup to a marker instance](https://maplibre.org/maplibre-gl-js/docs/examples/set-popup/)
+ * @see [Display a popup](https://maplibre.org/maplibre-gl-js/docs/examples/display-a-popup/)
+ * @see [Display a popup on hover](https://maplibre.org/maplibre-gl-js/docs/examples/display-a-popup-on-hover/)
+ * @see [Display a popup on click](https://maplibre.org/maplibre-gl-js/docs/examples/display-a-popup-on-click/)
+ * @see [Attach a popup to a marker instance](https://maplibre.org/maplibre-gl-js/docs/examples/attach-a-popup-to-a-marker-instance/)
  *
  * ## Events
  *
@@ -189,10 +196,10 @@ export class Popup extends Evented {
      *   .setHTML("<h1>Null Island</h1>")
      *   .addTo(map);
      * ```
-     * @see [Display a popup](https://maplibre.org/maplibre-gl-js/docs/examples/popup/)
-     * @see [Display a popup on hover](https://maplibre.org/maplibre-gl-js/docs/examples/popup-on-hover/)
-     * @see [Display a popup on click](https://maplibre.org/maplibre-gl-js/docs/examples/popup-on-click/)
-     * @see [Show polygon information on click](https://maplibre.org/maplibre-gl-js/docs/examples/polygon-popup-on-click/)
+     * @see [Display a popup](https://maplibre.org/maplibre-gl-js/docs/examples/display-a-popup/)
+     * @see [Display a popup on hover](https://maplibre.org/maplibre-gl-js/docs/examples/display-a-popup-on-hover/)
+     * @see [Display a popup on click](https://maplibre.org/maplibre-gl-js/docs/examples/display-a-popup-on-click/)
+     * @see [Show polygon information on click](https://maplibre.org/maplibre-gl-js/docs/examples/show-polygon-information-on-click/)
      */
     addTo(map: Map): this {
         if (this._map) this.remove();
@@ -225,6 +232,20 @@ export class Popup extends Evented {
 
         return this;
     }
+
+    /**
+     * Add opacity to popup if in globe projection and location is behind view
+     */
+    _updateOpacity = () => {
+        if (this.options.locationOccludedOpacity === undefined) {
+            return;
+        }
+        if (this._map.transform.isLocationOccluded(this.getLngLat())) {
+            this._container.style.opacity = `${this.options.locationOccludedOpacity}`;
+        } else {
+            this._container.style.opacity = '';
+        }
+    };
 
     /**
      * @returns `true` if the popup is open, `false` if it is closed.
@@ -379,7 +400,7 @@ export class Popup extends Evented {
      * Sets the popup's content to the HTML provided as a string.
      *
      * This method does not perform HTML filtering or sanitization, and must be
-     * used only with trusted content. Consider {@link Popup#setText} if
+     * used only with trusted content. Consider {@link Popup.setText} if
      * the content is an untrusted text string.
      *
      * @param html - A string representing HTML content for the popup.
@@ -390,15 +411,15 @@ export class Popup extends Evented {
      *   .setHTML("<h1>Hello World!</h1>")
      *   .addTo(map);
      * ```
-     * @see [Display a popup](https://maplibre.org/maplibre-gl-js/docs/examples/popup/)
-     * @see [Display a popup on hover](https://maplibre.org/maplibre-gl-js/docs/examples/popup-on-hover/)
-     * @see [Display a popup on click](https://maplibre.org/maplibre-gl-js/docs/examples/popup-on-click/)
-     * @see [Attach a popup to a marker instance](https://maplibre.org/maplibre-gl-js/docs/examples/set-popup/)
+     * @see [Display a popup](https://maplibre.org/maplibre-gl-js/docs/examples/display-a-popup/)
+     * @see [Display a popup on hover](https://maplibre.org/maplibre-gl-js/docs/examples/display-a-popup-on-hover/)
+     * @see [Display a popup on click](https://maplibre.org/maplibre-gl-js/docs/examples/display-a-popup-on-click/)
+     * @see [Attach a popup to a marker instance](https://maplibre.org/maplibre-gl-js/docs/examples/attach-a-popup-to-a-marker-instance/)
      */
     setHTML(html: string): this {
         const frag = document.createDocumentFragment();
         const temp = document.createElement('body');
-        let child;
+        let child: ChildNode;
         temp.innerHTML = html;
         while (true) {
             child = temp.firstChild;
@@ -595,18 +616,14 @@ export class Popup extends Evented {
             this._container.style.maxWidth = this.options.maxWidth;
         }
 
-        if (this._map.transform.renderWorldCopies && !this._trackPointer) {
-            this._lngLat = smartWrap(this._lngLat, this._flatPos, this._map.transform);
-        } else {
-            this._lngLat = this._lngLat?.wrap();
-        }
+        this._lngLat = smartWrap(this._lngLat, this._flatPos, this._map.transform, this._trackPointer);
 
         if (this._trackPointer && !cursor) return;
 
         const pos = this._flatPos = this._pos = this._trackPointer && cursor ? cursor : this._map.project(this._lngLat);
         if (this._map.terrain) {
             // flat position is saved because smartWrap needs non-elevated points
-            this._flatPos = this._trackPointer && cursor ? cursor : this._map.transform.locationPoint(this._lngLat);
+            this._flatPos = this._trackPointer && cursor ? cursor : this._map.transform.locationToScreenPoint(this._lngLat);
         }
 
         let anchor = this.options.anchor;
@@ -646,6 +663,8 @@ export class Popup extends Evented {
 
         DOM.setTransform(this._container, `${anchorTranslate[anchor]} translate(${offsetedPos.x}px,${offsetedPos.y}px)`);
         applyAnchorClass(this._container, anchor, 'popup');
+
+        this._updateOpacity();
     };
 
     _focusFirstElement() {

@@ -1,10 +1,10 @@
 import {interpolates} from '@maplibre/maplibre-gl-style-spec';
 import Point from '@mapbox/point-geometry';
-import {clamp} from '../util/util';
+import {clamp, type Complete, type RequireAtLeastOne} from '../util/util';
 
 /**
  * An `EdgeInset` object represents screen space padding applied to the edges of the viewport.
- * This shifts the apprent center or the vanishing point of the map. This is useful for adding floating UI elements
+ * This shifts the apparent center or the vanishing point of the map. This is useful for adding floating UI elements
  * on top of the map and having the vanishing point shift as UI elements resize.
  *
  * @group Geography and Geometry
@@ -92,7 +92,7 @@ export class EdgeInsets {
      *
      * @returns state as json
      */
-    toJSON(): PaddingOptions {
+    toJSON(): Complete<PaddingOptions> {
         return {
             top: this.top,
             bottom: this.bottom,
@@ -103,7 +103,7 @@ export class EdgeInsets {
 }
 
 /**
- * Options for setting padding on calls to methods such as {@link Map#fitBounds}, {@link Map#fitScreenCoordinates}, and {@link Map#setPadding}. Adjust these options to set the amount of padding in pixels added to the edges of the canvas. Set a uniform padding on all edges or individual values for each edge. All properties of this object must be
+ * Options for setting padding on calls to methods such as {@link Map.fitBounds}, {@link Map.fitScreenCoordinates}, and {@link Map.setPadding}. Adjust these options to set the amount of padding in pixels added to the edges of the canvas. Set a uniform padding on all edges or individual values for each edge. All properties of this object must be
  * non-negative integers.
  *
  * @group Geography and Geometry
@@ -126,7 +126,7 @@ export class EdgeInsets {
  * @see [Fit to the bounds of a LineString](https://maplibre.org/maplibre-gl-js/docs/examples/zoomto-linestring/)
  * @see [Fit a map to a bounding box](https://maplibre.org/maplibre-gl-js/docs/examples/fitbounds/)
  */
-export type PaddingOptions = {
+export type PaddingOptions = RequireAtLeastOne<{
     /**
      * Padding in pixels from the top of the map canvas.
      */
@@ -143,4 +143,4 @@ export type PaddingOptions = {
      * Padding in pixels from the right of the map canvas.
      */
     left: number;
-};
+}>;

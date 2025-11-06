@@ -1,42 +1,54 @@
-import Point from '@mapbox/point-geometry';
+import type Point from '@mapbox/point-geometry';
 import {loadGeometry} from './load_geometry';
 import {toEvaluationFeature} from './evaluation_feature';
 import {EXTENT} from './extent';
 import {featureFilter} from '@maplibre/maplibre-gl-style-spec';
 import {TransferableGridIndex} from '../util/transferable_grid_index';
 import {DictionaryCoder} from '../util/dictionary_coder';
-import vt from '@mapbox/vector-tile';
+import {type VectorTileLayer, type VectorTileFeature, VectorTile} from '@mapbox/vector-tile';
 import Protobuf from 'pbf';
 import {GeoJSONFeature} from '../util/vectortile_to_geojson';
 import type {MapGeoJSONFeature} from '../util/vectortile_to_geojson';
-import {arraysIntersect, mapObject, extend} from '../util/util';
-import {OverscaledTileID} from '../source/tile_id';
+import {mapObject, extend} from '../util/util';
+import {type OverscaledTileID} from '../tile/tile_id';
 import {register} from '../util/web_worker_transfer';
 import {EvaluationParameters} from '../style/evaluation_parameters';
-import {SourceFeatureState} from '../source/source_state';
+import {type SourceFeatureState} from '../source/source_state';
 import {polygonIntersectsBox} from '../util/intersection_tests';
 import {PossiblyEvaluated} from '../style/properties';
 import {FeatureIndexArray} from './array_types.g';
-import {mat4} from 'gl-matrix';
+import {type mat4} from 'gl-matrix';
 
 import type {StyleLayer} from '../style/style_layer';
 import type {FeatureFilter, FeatureState, FilterSpecification, PromoteIdSpecification} from '@maplibre/maplibre-gl-style-spec';
-import type {Transform} from '../geo/transform';
-import type {VectorTileFeature, VectorTileLayer} from '@mapbox/vector-tile';
+import type {IReadonlyTransform} from '../geo/transform_interface';
+import {Bounds} from '../geo/bounds';
 
 type QueryParameters = {
     scale: number;
     pixelPosMatrix: mat4;
-    transform: Transform;
+    transform: IReadonlyTransform;
     tileSize: number;
     queryGeometry: Array<Point>;
     cameraQueryGeometry: Array<Point>;
     queryPadding: number;
+    getElevation: undefined | ((x: number, y: number) => number);
     params: {
-        filter: FilterSpecification;
-        layers: Array<string>;
-        availableImages: Array<string>;
+        filter?: FilterSpecification;
+        layers?: Set<string> | null;
+        availableImages?: Array<string>;
+        globalState?: Record<string, any>;
     };
+};
+
+export type QueryResults = {
+    [_: string]: QueryResultsItem[];
+};
+
+export type QueryResultsItem = {
+    featureIndex: number;
+    feature: GeoJSONFeature;
+    intersectionZ?: boolean | number;
 };
 
 /**
@@ -98,7 +110,7 @@ export class FeatureIndex {
 
     loadVTLayers(): {[_: string]: VectorTileLayer} {
         if (!this.vtLayers) {
-            this.vtLayers = new vt.VectorTile(new Protobuf(this.rawTileData)).layers;
+            this.vtLayers = new VectorTile(new Protobuf(this.rawTileData)).layers;
             this.sourceLayerCoder = new DictionaryCoder(this.vtLayers ? Object.keys(this.vtLayers).sort() : ['_geojsonTileLayer']);
         }
         return this.vtLayers;
@@ -110,22 +122,22 @@ export class FeatureIndex {
         styleLayers: {[_: string]: StyleLayer},
         serializedLayers: {[_: string]: any},
         sourceFeatureState: SourceFeatureState
-    ): {[_: string]: Array<{featureIndex: number; feature: GeoJSONFeature}>} {
+    ): QueryResults {
         this.loadVTLayers();
 
-        const params = args.params || {} as { filter: any; layers: string[]; availableImages: string[] },
-            pixelsToTileUnits = EXTENT / args.tileSize / args.scale,
-            filter = featureFilter(params.filter);
+        const params = args.params;
+        const pixelsToTileUnits = EXTENT / args.tileSize / args.scale;
+        const filter = featureFilter(params.filter, params.globalState);
 
         const queryGeometry = args.queryGeometry;
         const queryPadding = args.queryPadding * pixelsToTileUnits;
 
-        const bounds = getBounds(queryGeometry);
+        const bounds = Bounds.fromPoints(queryGeometry);
         const matching = this.grid.query(bounds.minX - queryPadding, bounds.minY - queryPadding, bounds.maxX + queryPadding, bounds.maxY + queryPadding);
 
-        const cameraBounds = getBounds(args.cameraQueryGeometry);
+        const cameraBounds = Bounds.fromPoints(args.cameraQueryGeometry).expandBy(queryPadding);
         const matching3D = this.grid3D.query(
-            cameraBounds.minX - queryPadding, cameraBounds.minY - queryPadding, cameraBounds.maxX + queryPadding, cameraBounds.maxY + queryPadding,
+            cameraBounds.minX, cameraBounds.minY, cameraBounds.maxX, cameraBounds.maxY,
             (bx1, by1, bx2, by2) => {
                 return polygonIntersectsBox(args.cameraQueryGeometry, bx1 - queryPadding, by1 - queryPadding, bx2 + queryPadding, by2 + queryPadding);
             });
@@ -136,7 +148,7 @@ export class FeatureIndex {
 
         matching.sort(topDownFeatureComparator);
 
-        const result = {};
+        const result: QueryResults = {};
         let previousIndex;
         for (let k = 0; k < matching.length; k++) {
             const index = matching[k];
@@ -163,7 +175,18 @@ export class FeatureIndex {
                         featureGeometry = loadGeometry(feature);
                     }
 
-                    return styleLayer.queryIntersectsFeature(queryGeometry, feature, featureState, featureGeometry, this.z, args.transform, pixelsToTileUnits, args.pixelPosMatrix);
+                    return styleLayer.queryIntersectsFeature({
+                        queryGeometry,
+                        feature,
+                        featureState,
+                        geometry: featureGeometry,
+                        zoom: this.z,
+                        transform: args.transform,
+                        pixelsToTileUnits,
+                        pixelPosMatrix: args.pixelPosMatrix,
+                        unwrappedTileID: this.tileID.toUnwrapped(),
+                        getElevation: args.getElevation
+                    });
                 }
             );
         }
@@ -172,18 +195,12 @@ export class FeatureIndex {
     }
 
     loadMatchingFeature(
-        result: {
-            [_: string]: Array<{
-                featureIndex: number;
-                feature: GeoJSONFeature;
-                intersectionZ?: boolean | number;
-            }>;
-        },
+        result: QueryResults,
         bucketIndex: number,
         sourceLayerIndex: number,
         featureIndex: number,
         filter: FeatureFilter,
-        filterLayerIDs: Array<string>,
+        filterLayerIDs: Set<string> | undefined,
         availableImages: Array<string>,
         styleLayers: {[_: string]: StyleLayer},
         serializedLayers: {[_: string]: any},
@@ -196,7 +213,7 @@ export class FeatureIndex {
         ) => boolean | number) {
 
         const layerIDs = this.bucketLayerIDs[bucketIndex];
-        if (filterLayerIDs && !arraysIntersect(filterLayerIDs, layerIDs))
+        if (filterLayerIDs && !layerIDs.some(id => filterLayerIDs.has(id)))
             return;
 
         const sourceLayerName = this.sourceLayerCoder.decode(sourceLayerIndex);
@@ -217,7 +234,7 @@ export class FeatureIndex {
         for (let l = 0; l < layerIDs.length; l++) {
             const layerID = layerIDs[l];
 
-            if (filterLayerIDs && filterLayerIDs.indexOf(layerID) < 0) {
+            if (filterLayerIDs && !filterLayerIDs.has(layerID)) {
                 continue;
             }
 
@@ -258,14 +275,17 @@ export class FeatureIndex {
         serializedLayers: {[_: string]: StyleLayer},
         bucketIndex: number,
         sourceLayerIndex: number,
-        filterSpec: FilterSpecification,
-        filterLayerIDs: Array<string>,
+        filterParams: {
+            filterSpec: FilterSpecification;
+            globalState: Record<string, any>;
+        },
+        filterLayerIDs: Set<string> | null,
         availableImages: Array<string>,
-        styleLayers: {[_: string]: StyleLayer}) {
-        const result = {};
+        styleLayers: {[_: string]: StyleLayer}): QueryResults {
+        const result: QueryResults = {};
         this.loadVTLayers();
 
-        const filter = featureFilter(filterSpec);
+        const filter = featureFilter(filterParams.filterSpec, filterParams.globalState);
 
         for (const symbolFeatureIndex of symbolFeatureIndexes) {
             this.loadMatchingFeature(
@@ -300,6 +320,11 @@ export class FeatureIndex {
             const propName = typeof this.promoteId === 'string' ? this.promoteId : this.promoteId[sourceLayerId];
             id = feature.properties[propName] as string | number;
             if (typeof id === 'boolean') id = Number(id);
+
+            // When cluster is true, the id is the cluster_id even though promoteId is set
+            if (id === undefined && feature.properties?.cluster && this.promoteId) {
+                id = Number(feature.properties.cluster_id);
+            }
         }
         return id;
     }
@@ -316,20 +341,6 @@ function evaluateProperties(serializedProperties, styleLayerProperties, feature,
         const prop = styleLayerProperties instanceof PossiblyEvaluated ? styleLayerProperties.get(key) : null;
         return prop && prop.evaluate ? prop.evaluate(feature, featureState, availableImages) : prop;
     });
-}
-
-function getBounds(geometry: Array<Point>) {
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    for (const p of geometry) {
-        minX = Math.min(minX, p.x);
-        minY = Math.min(minY, p.y);
-        maxX = Math.max(maxX, p.x);
-        maxY = Math.max(maxY, p.y);
-    }
-    return {minX, minY, maxX, maxY};
 }
 
 function topDownFeatureComparator(a, b) {

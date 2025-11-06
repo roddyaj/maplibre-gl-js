@@ -1,9 +1,9 @@
 import Protobuf from 'pbf';
-import VT from '@mapbox/vector-tile';
+import {VectorTile} from '@mapbox/vector-tile';
 
-import {derefLayers as deref} from '@maplibre/maplibre-gl-style-spec';
+import {derefLayers} from '@maplibre/maplibre-gl-style-spec'
 import {Style} from '../../../src/style/style';
-import {Transform} from '../../../src/geo/transform';
+import {IReadonlyTransform} from '../../../src/geo/transform_interface';
 import {Evented} from '../../../src/util/evented';
 import {RequestManager} from '../../../src/util/request_manager';
 import {WorkerTile} from '../../../src/source/worker_tile';
@@ -11,21 +11,23 @@ import {StyleLayerIndex} from '../../../src/style/style_layer_index';
 
 import type {StyleSpecification} from '@maplibre/maplibre-gl-style-spec';
 import type {WorkerTileResult} from '../../../src/source/worker_source';
-import type {OverscaledTileID} from '../../../src/source/tile_id';
+import type {OverscaledTileID} from '../../../src/tile/tile_id';
 import type {TileJSON} from '../../../src/util/util';
 import type {Map} from '../../../src/ui/map';
 import type {IActor} from '../../../src/util/actor';
+import {SubdivisionGranularitySetting} from '../../../src/render/subdivision_granularity_settings';
 import {MessageType} from '../../../src/util/actor_messages';
+import {MercatorTransform} from '../../../src/geo/projection/mercator_transform';
 
 class StubMap extends Evented {
     style: Style;
     _requestManager: RequestManager;
-    transform: Transform;
+    transform: IReadonlyTransform;
 
     constructor() {
         super();
         this._requestManager = new RequestManager();
-        this.transform = new Transform();
+        this.transform = new MercatorTransform();
     }
 
     getPixelRatio() {
@@ -37,6 +39,8 @@ class StubMap extends Evented {
     _getMapId() {
         return 1;
     }
+
+    migrateProjection() {}
 }
 
 function createStyle(styleJSON: StyleSpecification): Promise<Style> {
@@ -45,9 +49,8 @@ function createStyle(styleJSON: StyleSpecification): Promise<Style> {
         const style = new Style(mapStub);
         mapStub.style = style;
         style.loadJSON(styleJSON);
-        style
-            .on('style.load', () => resolve(style))
-            .on('error', reject);
+        style.on('style.load', () => resolve(style));
+        style.on('error', reject);
     });
 }
 
@@ -58,13 +61,14 @@ export default class TileParser {
     layerIndex: StyleLayerIndex;
     icons: any;
     glyphs: any;
+    dashes: any;
     style: Style;
     actor: IActor;
 
     constructor(styleJSON: StyleSpecification, sourceID: string) {
         this.styleJSON = styleJSON;
         this.sourceID = sourceID;
-        this.layerIndex = new StyleLayerIndex(deref(this.styleJSON.layers));
+        this.layerIndex = new StyleLayerIndex(derefLayers(this.styleJSON.layers));
         this.glyphs = {};
         this.icons = {};
     }
@@ -85,6 +89,14 @@ export default class TileParser {
         return this.glyphs[key];
     }
 
+    async loadDashes(params: any) {
+        const key = JSON.stringify(params);
+        if (!this.dashes[key]) {
+            this.dashes[key] = await this.style.getDashes('', params);
+        }
+        return this.dashes[key];
+    }
+
     setup(): Promise<void> {
         const parser = this;
         this.actor = {
@@ -94,6 +106,9 @@ export default class TileParser {
                 }
                 if (message.type === MessageType.getGlyphs) {
                     return parser.loadGlyphs(message.data);
+                }
+                if (message.type === MessageType.getDashes) {
+                    return parser.loadDashes(message.data);
                 }
                 throw new Error(`Invalid action ${message.type}`);
             }
@@ -133,11 +148,12 @@ export default class TileParser {
             pixelRatio: 1,
             request: {url: ''},
             returnDependencies,
-            promoteId: undefined
+            promoteId: undefined,
+            subdivisionGranularity: SubdivisionGranularitySetting.noSubdivision
         });
 
-        const vectorTile = new VT.VectorTile(new Protobuf(tile.buffer));
+        const vectorTile = new VectorTile(new Protobuf(tile.buffer));
 
-        return workerTile.parse(vectorTile, this.layerIndex, [], this.actor);
+        return workerTile.parse(vectorTile, this.layerIndex, [], this.actor, SubdivisionGranularitySetting.noSubdivision);
     }
 }

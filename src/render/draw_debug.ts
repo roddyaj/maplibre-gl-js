@@ -6,9 +6,9 @@ import {Color} from '@maplibre/maplibre-gl-style-spec';
 import {ColorMode} from '../gl/color_mode';
 
 import type {Painter} from './painter';
-import type {SourceCache} from '../source/source_cache';
-import type {OverscaledTileID} from '../source/tile_id';
-import {Style} from '../style/style';
+import type {TileManager} from '../tile/tile_manager';
+import type {OverscaledTileID} from '../tile/tile_id';
+import {type Style} from '../style/style';
 
 const topColor = new Color(1, 0, 0, 1);
 const btmColor = new Color(0, 1, 0, 1);
@@ -59,17 +59,16 @@ function drawDebugSSRect(painter: Painter, x: number, y: number, width: number, 
     gl.disable(gl.SCISSOR_TEST);
 }
 
-export function drawDebug(painter: Painter, sourceCache: SourceCache, coords: Array<OverscaledTileID>) {
+export function drawDebug(painter: Painter, tileManager: TileManager, coords: Array<OverscaledTileID>) {
     for (let i = 0; i < coords.length; i++) {
-        drawDebugTile(painter, sourceCache, coords[i]);
+        drawDebugTile(painter, tileManager, coords[i]);
     }
 }
 
-function drawDebugTile(painter: Painter, sourceCache: SourceCache, coord: OverscaledTileID) {
+function drawDebugTile(painter: Painter, tileManager: TileManager, coord: OverscaledTileID) {
     const context = painter.context;
     const gl = context.gl;
 
-    const posMatrix = coord.posMatrix;
     const program = painter.useProgram('debug');
 
     const depthMode = DepthMode.disabled;
@@ -80,10 +79,10 @@ function drawDebugTile(painter: Painter, sourceCache: SourceCache, coord: Oversc
 
     context.activeTexture.set(gl.TEXTURE0);
 
-    const tileRawData = sourceCache.getTileByID(coord.key).latestRawTileData;
+    const tileRawData = tileManager.getTileByID(coord.key).latestRawTileData;
     const tileByteLength = (tileRawData && tileRawData.byteLength) || 0;
     const tileSizeKb = Math.floor(tileByteLength / 1024);
-    const tileSize = sourceCache.getTile(coord).tileSize;
+    const tileSize = tileManager.getTile(coord).tileSize;
     const scaleRatio = (512 / Math.min(tileSize, 512) * (coord.overscaledZ / painter.transform.zoom)) * 0.5;
     let tileIdText = coord.canonical.toString();
     if (coord.overscaledZ !== coord.canonical.z) {
@@ -92,11 +91,13 @@ function drawDebugTile(painter: Painter, sourceCache: SourceCache, coord: Oversc
     const tileLabel = `${tileIdText} ${tileSizeKb}kB`;
     drawTextToOverlay(painter, tileLabel);
 
+    const projectionData = painter.transform.getProjectionData({overscaledTileID: coord, applyGlobeMatrix: true, applyTerrainMatrix: true});
+
     program.draw(context, gl.TRIANGLES, depthMode, stencilMode, ColorMode.alphaBlended, CullFaceMode.disabled,
-        debugUniformValues(posMatrix, Color.transparent, scaleRatio), null, id,
+        debugUniformValues(Color.transparent, scaleRatio), null, projectionData, id,
         painter.debugBuffer, painter.quadTriangleIndexBuffer, painter.debugSegments);
     program.draw(context, gl.LINE_STRIP, depthMode, stencilMode, colorMode, CullFaceMode.disabled,
-        debugUniformValues(posMatrix, Color.red), terrainData, id,
+        debugUniformValues(Color.red), terrainData, projectionData, id,
         painter.debugBuffer, painter.tileBorderIndexBuffer, painter.debugSegments);
 }
 
@@ -120,22 +121,22 @@ function drawTextToOverlay(painter: Painter, text: string) {
     painter.debugOverlayTexture.bind(gl.LINEAR, gl.CLAMP_TO_EDGE);
 }
 
-export function selectDebugSource(style: Style, zoom: number): SourceCache | null {
+export function selectDebugSource(style: Style, zoom: number): TileManager | null {
     // Use vector source with highest maxzoom
     // Else use source with highest maxzoom of any type
-    let selectedSource: SourceCache = null;
+    let selectedSource: TileManager = null;
     const layers = Object.values(style._layers);
     const sources = layers.flatMap((layer) => {
         if (layer.source && !layer.isHidden(zoom)) {
-            const sourceCache = style.sourceCaches[layer.source];
-            return [sourceCache];
+            const tileManager = style.tileManagers[layer.source];
+            return [tileManager];
         } else {
             return [];
         }
     });
     const vectorSources = sources.filter((source) => source.getSource().type === 'vector');
     const otherSources = sources.filter((source) => source.getSource().type !== 'vector');
-    const considerSource = (source: SourceCache) => {
+    const considerSource = (source: TileManager) => {
         if (!selectedSource || (selectedSource.getSource().maxzoom < source.getSource().maxzoom)) {
             selectedSource = source;
         }

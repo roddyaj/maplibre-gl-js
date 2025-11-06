@@ -7,7 +7,7 @@ import {anchorTranslate, applyAnchorClass} from './anchor';
 import type {PositionAnchor} from './anchor';
 import {Event, Evented} from '../util/evented';
 import type {Map} from './map';
-import {Popup, Offset} from './popup';
+import {type Popup, type Offset} from './popup';
 import type {LngLatLike} from '../geo/lng_lat';
 import type {MapMouseEvent, MapTouchEvent} from './events';
 import type {PointLike} from './camera';
@@ -15,12 +15,12 @@ import type {PointLike} from './camera';
 /**
  * Alignment options of rotation and pitch
  */
-type Alignment = 'map' | 'viewport' | 'auto';
+export type Alignment = 'map' | 'viewport' | 'auto';
 
 /**
  * The {@link Marker} options object
  */
-type MarkerOptions = {
+export type MarkerOptions = {
     /**
      * DOM element to use as a marker. The default is a light blue, droplet-shaped SVG marker.
      */
@@ -34,7 +34,7 @@ type MarkerOptions = {
      */
     offset?: PointLike;
     /**
-     * A string indicating the part of the Marker that should be positioned closest to the coordinate set via {@link Marker#setLngLat}.
+     * A string indicating the part of the Marker that should be positioned closest to the coordinate set via {@link Marker.setLngLat}.
      * Options are `'center'`, `'top'`, `'bottom'`, `'left'`, `'right'`, `'top-left'`, `'top-right'`, `'bottom-left'`, and `'bottom-right'`.
      * @defaultValue 'center'
      * */
@@ -113,8 +113,8 @@ type MarkerOptions = {
  *   }).setLngLat([30.5, 50.5])
  *   .addTo(map);
  * ```
- * @see [Add custom icons with Markers](https://maplibre.org/maplibre-gl-js/docs/examples/custom-marker-icons/)
- * @see [Create a draggable Marker](https://maplibre.org/maplibre-gl-js/docs/examples/drag-a-marker/)
+ * @see [Add custom icons with Markers](https://maplibre.org/maplibre-gl-js/docs/examples/add-custom-icons-with-markers/)
+ * @see [Create a draggable Marker](https://maplibre.org/maplibre-gl-js/docs/examples/create-a-draggable-marker/)
  *
  * ## Events
  *
@@ -168,7 +168,6 @@ export class Marker extends Evented {
         this._rotation = options && options.rotation || 0;
         this._rotationAlignment = options && options.rotationAlignment || 'auto';
         this._pitchAlignment = options && options.pitchAlignment && options.pitchAlignment !== 'auto' ?  options.pitchAlignment : this._rotationAlignment;
-        this.setOpacity(); // set default opacity
         this.setOpacity(options?.opacity, options?.opacityWhenCovered);
 
         if (!options || !options.element) {
@@ -316,19 +315,29 @@ export class Marker extends Evented {
     addTo(map: Map): this {
         this.remove();
         this._map = map;
-        this._element.setAttribute('aria-label', map._getUIString('Marker.Title'));
+
+        if (!this._element.hasAttribute('aria-label')) {
+            this._element.setAttribute('aria-label', map._getUIString('Marker.Title'));
+        }
+
+        // aria-label is set either by user or above default, so set role
+        // since div is interactive and cannot have aria-label without a role
+        if (!this._element.hasAttribute('role')) {
+            this._element.setAttribute('role', 'button');
+        }
 
         map.getCanvasContainer().appendChild(this._element);
         map.on('move', this._update);
         map.on('moveend', this._update);
         map.on('terrain', this._update);
+        map.on('projectiontransition', this._update);
 
         this.setDraggable(this._draggable);
         this._update();
 
         // If we attached the `click` listener to the marker element, the popup
         // would close once the event propagated to `map` due to the
-        // `Popup#_onClickClose` listener.
+        // `Popup._onClickClose` listener.
         this._map.on('click', this._onMapClick);
 
         return this;
@@ -352,6 +361,7 @@ export class Marker extends Evented {
             this._map.off('move', this._update);
             this._map.off('moveend', this._update);
             this._map.off('terrain', this._update);
+            this._map.off('projectiontransition', this._update);
             this._map.off('mousedown', this._addDragHandler);
             this._map.off('touchstart', this._addDragHandler);
             this._map.off('mouseup', this._onUp);
@@ -380,7 +390,7 @@ export class Marker extends Evented {
      * // Print the marker's longitude and latitude values in the console
      * console.log('Longitude: ' + lngLat.lng + ', Latitude: ' + lngLat.lat )
      * ```
-     * @see [Create a draggable Marker](https://maplibre.org/maplibre-gl-js/docs/examples/drag-a-marker/)
+     * @see [Create a draggable Marker](https://maplibre.org/maplibre-gl-js/docs/examples/create-a-draggable-marker/)
      */
     getLngLat(): LngLat {
         return this._lngLat;
@@ -396,8 +406,8 @@ export class Marker extends Evented {
      *   .setLngLat([-65.017, -16.457])
      *   .addTo(map);
      * ```
-     * @see [Add custom icons with Markers](https://maplibre.org/maplibre-gl-js/docs/examples/custom-marker-icons/)
-     * @see [Create a draggable Marker](https://maplibre.org/maplibre-gl-js/docs/examples/drag-a-marker/)
+     * @see [Add custom icons with Markers](https://maplibre.org/maplibre-gl-js/docs/examples/add-custom-icons-with-markers/)
+     * @see [Create a draggable Marker](https://maplibre.org/maplibre-gl-js/docs/examples/create-a-draggable-marker/)
      */
     setLngLat(lnglat: LngLatLike): this {
         this._lngLat = LngLat.convert(lnglat);
@@ -426,7 +436,7 @@ export class Marker extends Evented {
      *  .setPopup(new Popup().setHTML("<h1>Hello World!</h1>")) // add popup
      *  .addTo(map);
      * ```
-     * @see [Attach a popup to a marker instance](https://maplibre.org/maplibre-gl-js/docs/examples/set-popup/)
+     * @see [Attach a popup to a marker instance](https://maplibre.org/maplibre-gl-js/docs/examples/attach-a-popup-to-a-marker-instance/)
      */
     setPopup(popup?: Popup | null): this {
         if (this._popup) {
@@ -549,8 +559,10 @@ export class Marker extends Evented {
 
     _updateOpacity(force: boolean = false) {
         const terrain = this._map?.terrain;
-        if (!terrain) {
-            if (this._element.style.opacity !== this._opacity) { this._element.style.opacity = this._opacity; }
+        const occluded = this._map.transform.isLocationOccluded(this._lngLat);
+        if (!terrain || occluded) {
+            const targetOpacity = occluded ? this._opacityWhenCovered : this._opacity;
+            if (this._element.style.opacity !== targetOpacity) { this._element.style.opacity = targetOpacity; }
             return;
         }
         if (force) {
@@ -569,14 +581,13 @@ export class Marker extends Evented {
         // Transform marker position to clip space
         const elevation = map.terrain.getElevationForLngLatZoom(this._lngLat, map.transform.tileZoom);
         const markerDistance = map.transform.lngLatToCameraDepth(this._lngLat, elevation);
-
         const forgiveness = .006;
         if (markerDistance - terrainDistance < forgiveness) {
             this._element.style.opacity = this._opacity;
             return;
         }
         // If the base is obscured, use the offset to check if the marker's center is obscured.
-        const metersToCenter = -this._offset.y / map.transform._pixelPerMeter;
+        const metersToCenter = -this._offset.y / map.transform.pixelsPerMeter;
         const elevationToCenter = Math.sin(map.getPitch() * Math.PI / 180) * metersToCenter;
         const terrainDistanceCenter = map.terrain.depthAtPoint(new Point(this._pos.x, this._pos.y - this._offset.y));
         const markerDistanceCenter = map.transform.lngLatToCameraDepth(this._lngLat, elevation + elevationToCenter);
@@ -595,16 +606,12 @@ export class Marker extends Evented {
             this._map.once('render', this._update);
         }
 
-        if (this._map.transform.renderWorldCopies) {
-            this._lngLat = smartWrap(this._lngLat, this._flatPos, this._map.transform);
-        } else {
-            this._lngLat = this._lngLat?.wrap();
-        }
+        this._lngLat = smartWrap(this._lngLat, this._flatPos, this._map.transform);
 
         this._flatPos = this._pos = this._map.project(this._lngLat)._add(this._offset);
         if (this._map.terrain) {
             // flat position is saved because smartWrap needs non-elevated points
-            this._flatPos = this._map.transform.locationPoint(this._lngLat)._add(this._offset);
+            this._flatPos = this._map.transform.locationToScreenPoint(this._lngLat)._add(this._offset);
         }
 
         let rotation = '';
@@ -623,7 +630,7 @@ export class Marker extends Evented {
 
         // because rounding the coordinates at every `move` event causes stuttered zooming
         // we only round them when _update is called with `moveend` or when its called with
-        // no arguments (when the Marker is initialized or Marker#setLngLat is invoked).
+        // no arguments (when the Marker is initialized or Marker.setLngLat is invoked).
         if (!this._subpixelPositioning && (!e || e.type === 'moveend')) {
             this._pos = this._pos.round();
         }
@@ -794,7 +801,7 @@ export class Marker extends Evented {
 
     /**
      * Sets the `rotation` property of the marker.
-     * @param rotation - The rotation angle of the marker (clockwise, in degrees), relative to its respective {@link Marker#setRotationAlignment} setting.
+     * @param rotation - The rotation angle of the marker (clockwise, in degrees), relative to its respective {@link Marker.setRotationAlignment} setting.
      */
     setRotation(rotation?: number): this {
         this._rotation = rotation || 0;
@@ -853,16 +860,19 @@ export class Marker extends Evented {
      * @param opacityWhenCovered - Sets the `opacityWhenCovered` property of the marker.
      */
     setOpacity(opacity?: string, opacityWhenCovered?: string): this {
-        if (opacity === undefined && opacityWhenCovered === undefined) {
+        // Reset opacity when called without params or from constructor
+        if (this._opacity === undefined || (opacity === undefined && opacityWhenCovered === undefined)) {
             this._opacity = '1';
             this._opacityWhenCovered = '0.2';
         }
+
         if (opacity !== undefined) {
             this._opacity = opacity;
         }
         if (opacityWhenCovered !== undefined) {
             this._opacityWhenCovered = opacityWhenCovered;
         }
+
         if (this._map) {
             this._updateOpacity(true);
         }

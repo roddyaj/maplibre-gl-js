@@ -1,12 +1,12 @@
-import {Actor, ActorTarget, IActor} from '../util/actor';
+import {Actor, type ActorTarget, type IActor} from '../util/actor';
 import {StyleLayerIndex} from '../style/style_layer_index';
 import {VectorTileWorkerSource} from './vector_tile_worker_source';
 import {RasterDEMTileWorkerSource} from './raster_dem_tile_worker_source';
-import {rtlWorkerPlugin, RTLTextPlugin} from './rtl_text_plugin_worker';
-import {GeoJSONWorkerSource, LoadGeoJSONParameters} from './geojson_worker_source';
+import {rtlWorkerPlugin, type RTLTextPlugin} from './rtl_text_plugin_worker';
+import {GeoJSONWorkerSource, type LoadGeoJSONParameters} from './geojson_worker_source';
 import {isWorker} from '../util/util';
 import {addProtocol, removeProtocol} from './protocol_crud';
-import {PluginState} from './rtl_text_plugin_status';
+import {type PluginState} from './rtl_text_plugin_status';
 import type {
     WorkerSource,
     WorkerSourceConstructor,
@@ -22,7 +22,7 @@ import {
     type ClusterIDAndSource,
     type GetClusterLeavesParams,
     type RemoveSourceParams,
-    type UpdateLayersParamaeters
+    type UpdateLayersParameters
 } from '../util/actor_messages';
 
 /**
@@ -59,6 +59,7 @@ export default class Worker {
         };
     };
     referrer: string;
+    globalStates: Map<string, Record<string, any>>;
 
     constructor(self: WorkerGlobalScopeInterface & ActorTarget) {
         this.self = self;
@@ -70,6 +71,8 @@ export default class Worker {
         this.workerSources = {};
         this.demWorkerSources = {};
         this.externalWorkerSourceTypes = {};
+
+        this.globalStates = new Map<string, Record<string, any>>();
 
         this.self.registerWorkerSource = (name: string, WorkerSource: WorkerSourceConstructor) => {
             if (this.externalWorkerSourceTypes[name]) {
@@ -83,9 +86,7 @@ export default class Worker {
 
         // This is invoked by the RTL text plugin when the download via the `importScripts` call has finished, and the code has been parsed.
         this.self.registerRTLTextPlugin = (rtlTextPlugin: RTLTextPlugin) => {
-            if (rtlWorkerPlugin.isParsed()) {
-                throw new Error('RTL text plugin already registered.');
-            }
+
             rtlWorkerPlugin.setMethods(rtlTextPlugin);
         };
 
@@ -153,6 +154,7 @@ export default class Worker {
             delete this.availableImages[mapId];
             delete this.workerSources[mapId];
             delete this.demWorkerSources[mapId];
+            this.globalStates.delete(mapId);
         });
 
         this.actor.registerMessageHandler(MessageType.setReferrer, async (_mapId: string, params: string) => {
@@ -171,13 +173,29 @@ export default class Worker {
             return this._setImages(mapId, params);
         });
 
-        this.actor.registerMessageHandler(MessageType.updateLayers, async (mapId: string, params: UpdateLayersParamaeters) => {
-            this._getLayerIndex(mapId).update(params.layers, params.removedIds);
+        this.actor.registerMessageHandler(MessageType.updateLayers, async (mapId: string, params: UpdateLayersParameters) => {
+            this._getLayerIndex(mapId).update(params.layers, params.removedIds, this._getGlobalState(mapId));
+        });
+
+        this.actor.registerMessageHandler(MessageType.updateGlobalState, async (mapId: string, params: Record<string, any>) => {
+            const globalState = this._getGlobalState(mapId);
+            for (const key in params) {
+                globalState[key] = params[key];
+            }
         });
 
         this.actor.registerMessageHandler(MessageType.setLayers, async (mapId: string, params: Array<LayerSpecification>) => {
-            this._getLayerIndex(mapId).replace(params);
+            this._getLayerIndex(mapId).replace(params, this._getGlobalState(mapId));
         });
+    }
+
+    private _getGlobalState(mapId: string): Record<string, any> {
+        let state = this.globalStates.get(mapId);
+        if (!state) {
+            state = {};
+            this.globalStates.set(mapId, state);
+        }
+        return state;
     }
 
     private async _setImages(mapId: string, images: Array<string>): Promise<void> {
@@ -191,35 +209,8 @@ export default class Worker {
     }
 
     private async _syncRTLPluginState(mapId: string, incomingState: PluginState): Promise<PluginState> {
-
-        // Parsed plugin cannot be changed, so just return its current state.
-        if (rtlWorkerPlugin.isParsed()) {
-            return rtlWorkerPlugin.getState();
-        }
-
-        if (incomingState.pluginStatus !== 'loading') {
-            // simply sync and done
-            rtlWorkerPlugin.setState(incomingState);
-            return incomingState;
-        }
-        const urlToLoad = incomingState.pluginURL;
-        this.self.importScripts(urlToLoad);
-        const complete = rtlWorkerPlugin.isParsed();
-        if (complete) {
-            const loadedState: PluginState = {
-                pluginStatus: 'loaded',
-                pluginURL: urlToLoad
-            };
-            rtlWorkerPlugin.setState(loadedState);
-            return loadedState;
-        }
-
-        // error case
-        rtlWorkerPlugin.setState({
-            pluginStatus: 'error',
-            pluginURL: ''
-        });
-        throw new Error(`RTL Text Plugin failed to import scripts from ${urlToLoad}`);
+        const state = await rtlWorkerPlugin.syncState(incomingState, this.self.importScripts);
+        return state;
     }
 
     private _getAvailableImages(mapId: string) {

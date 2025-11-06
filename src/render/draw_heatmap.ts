@@ -4,44 +4,45 @@ import {DepthMode} from '../gl/depth_mode';
 import {StencilMode} from '../gl/stencil_mode';
 import {ColorMode} from '../gl/color_mode';
 import {CullFaceMode} from '../gl/cull_face_mode';
-import {Context} from '../gl/context';
-import {Framebuffer} from '../gl/framebuffer';
-import {Tile} from '../source/tile';
+import {type Context} from '../gl/context';
+import {type Framebuffer} from '../gl/framebuffer';
+import {type Tile} from '../tile/tile';
 import {
     heatmapUniformValues,
     heatmapTextureUniformValues
 } from './program/heatmap_program';
 import {HEATMAP_FULL_RENDER_FBO_KEY} from '../style/style_layer/heatmap_style_layer';
 
-import type {Painter} from './painter';
-import type {SourceCache} from '../source/source_cache';
+import type {Painter, RenderOptions} from './painter';
+import type {TileManager} from '../tile/tile_manager';
 import type {HeatmapStyleLayer} from '../style/style_layer/heatmap_style_layer';
 import type {HeatmapBucket} from '../data/bucket/heatmap_bucket';
-import type {OverscaledTileID} from '../source/tile_id';
+import type {OverscaledTileID} from '../tile/tile_id';
 
-export function drawHeatmap(painter: Painter, sourceCache: SourceCache, layer: HeatmapStyleLayer, tileIDs: Array<OverscaledTileID>) {
+export function drawHeatmap(painter: Painter, tileManager: TileManager, layer: HeatmapStyleLayer, tileIDs: Array<OverscaledTileID>, renderOptions: RenderOptions) {
     if (layer.paint.get('heatmap-opacity') === 0) {
         return;
     }
     const context = painter.context;
+    const {isRenderingToTexture, isRenderingGlobe} = renderOptions;
 
     if (painter.style.map.terrain) {
         for (const coord of tileIDs) {
-            const tile = sourceCache.getTile(coord);
+            const tile = tileManager.getTile(coord);
             // Skip tiles that have uncovered parents to avoid flickering; we don't need
             // to use complex tile masking here because the change between zoom levels is subtle,
             // so it's fine to simply render the parent until all its 4 children are loaded
-            if (sourceCache.hasRenderableParent(coord)) continue;
+            if (tileManager.hasRenderableParent(coord)) continue;
             if (painter.renderPass === 'offscreen') {
-                prepareHeatmapTerrain(painter, tile, layer, coord);
+                prepareHeatmapTerrain(painter, tile, layer, coord, isRenderingGlobe);
             } else if (painter.renderPass === 'translucent') {
-                renderHeatmapTerrain(painter, layer, coord);
+                renderHeatmapTerrain(painter, layer, coord, isRenderingToTexture, isRenderingGlobe);
             }
         }
         context.viewport.set([0, 0, painter.width, painter.height]);
     } else {
         if (painter.renderPass === 'offscreen') {
-            prepareHeatmapFlat(painter, sourceCache, layer, tileIDs);
+            prepareHeatmapFlat(painter, tileManager, layer, tileIDs);
         } else if (painter.renderPass === 'translucent') {
             renderHeatmapFlat(painter, layer);
         }
@@ -49,9 +50,10 @@ export function drawHeatmap(painter: Painter, sourceCache: SourceCache, layer: H
     }
 }
 
-function prepareHeatmapFlat(painter: Painter, sourceCache: SourceCache, layer: HeatmapStyleLayer, coords: Array<OverscaledTileID>) {
+function prepareHeatmapFlat(painter: Painter, tileManager: TileManager, layer: HeatmapStyleLayer, coords: Array<OverscaledTileID>) {
     const context = painter.context;
     const gl = context.gl;
+    const transform = painter.transform;
 
     // Allow kernels to be drawn across boundaries, so that
     // large kernels are not clipped to tiles
@@ -69,20 +71,24 @@ function prepareHeatmapFlat(painter: Painter, sourceCache: SourceCache, layer: H
         // Skip tiles that have uncovered parents to avoid flickering; we don't need
         // to use complex tile masking here because the change between zoom levels is subtle,
         // so it's fine to simply render the parent until all its 4 children are loaded
-        if (sourceCache.hasRenderableParent(coord)) continue;
+        if (tileManager.hasRenderableParent(coord)) continue;
 
-        const tile = sourceCache.getTile(coord);
+        const tile = tileManager.getTile(coord);
         const bucket: HeatmapBucket = (tile.getBucket(layer) as any);
         if (!bucket) continue;
 
         const programConfiguration = bucket.programConfigurations.get(layer.id);
         const program = painter.useProgram('heatmap', programConfiguration);
-        const {zoom} = painter.transform;
 
-        program.draw(context, gl.TRIANGLES, DepthMode.disabled, stencilMode, colorMode, CullFaceMode.disabled,
-            heatmapUniformValues(coord.posMatrix, tile, zoom, layer.paint.get('heatmap-intensity')), null,
+        const projectionData = transform.getProjectionData({overscaledTileID: coord, applyGlobeMatrix: true, applyTerrainMatrix: false});
+
+        const radiusCorrectionFactor = transform.getCircleRadiusCorrection();
+
+        program.draw(context, gl.TRIANGLES, DepthMode.disabled, stencilMode, colorMode, CullFaceMode.backCCW,
+            heatmapUniformValues(tile, transform.zoom, layer.paint.get('heatmap-intensity'), radiusCorrectionFactor),
+            null, projectionData,
             layer.id, bucket.layoutVertexBuffer, bucket.indexBuffer,
-            bucket.segments, layer.paint, painter.transform.zoom,
+            bucket.segments, layer.paint, transform.zoom,
             programConfiguration);
     }
 
@@ -109,12 +115,12 @@ function renderHeatmapFlat(painter: Painter, layer: HeatmapStyleLayer) {
 
     painter.useProgram('heatmapTexture').draw(context, gl.TRIANGLES,
         DepthMode.disabled, StencilMode.disabled, painter.colorModeForRenderPass(), CullFaceMode.disabled,
-        heatmapTextureUniformValues(painter, layer, 0, 1), null,
+        heatmapTextureUniformValues(painter, layer, 0, 1), null, null,
         layer.id, painter.viewportBuffer, painter.quadTriangleIndexBuffer,
         painter.viewportSegments, layer.paint, painter.transform.zoom);
 }
 
-function prepareHeatmapTerrain(painter: Painter, tile: Tile, layer: HeatmapStyleLayer, coord: OverscaledTileID) {
+function prepareHeatmapTerrain(painter: Painter, tile: Tile, layer: HeatmapStyleLayer, coord: OverscaledTileID, isRenderingGlobe: boolean) {
     const context = painter.context;
     const gl = context.gl;
 
@@ -138,19 +144,22 @@ function prepareHeatmapTerrain(painter: Painter, tile: Tile, layer: HeatmapStyle
     context.clear({color: Color.transparent});
 
     const programConfiguration = bucket.programConfigurations.get(layer.id);
-    const program = painter.useProgram('heatmap', programConfiguration);
+    const program = painter.useProgram('heatmap', programConfiguration, !isRenderingGlobe);
+
+    const projectionData = painter.transform.getProjectionData({overscaledTileID: tile.tileID, applyGlobeMatrix: true, applyTerrainMatrix: true});
 
     const terrainData = painter.style.map.terrain.getTerrainData(coord);
     program.draw(context, gl.TRIANGLES, DepthMode.disabled, stencilMode, colorMode, CullFaceMode.disabled,
-        heatmapUniformValues(coord.posMatrix, tile, painter.transform.zoom, layer.paint.get('heatmap-intensity')), terrainData,
+        heatmapUniformValues(tile, painter.transform.zoom, layer.paint.get('heatmap-intensity'), 1.0), terrainData, projectionData,
         layer.id, bucket.layoutVertexBuffer, bucket.indexBuffer,
         bucket.segments, layer.paint, painter.transform.zoom,
         programConfiguration);
 }
 
-function renderHeatmapTerrain(painter: Painter, layer: HeatmapStyleLayer, coord: OverscaledTileID) {
+function renderHeatmapTerrain(painter: Painter, layer: HeatmapStyleLayer, coord: OverscaledTileID, isRenderingToTexture: boolean, isRenderingGlobe: boolean) {
     const context = painter.context;
     const gl = context.gl;
+    const transform = painter.transform;
 
     context.setColorMode(painter.colorModeForRenderPass());
 
@@ -169,11 +178,13 @@ function renderHeatmapTerrain(painter: Painter, layer: HeatmapStyleLayer, coord:
     context.activeTexture.set(gl.TEXTURE1);
     colorRampTexture.bind(gl.LINEAR, gl.CLAMP_TO_EDGE);
 
+    const projectionData = transform.getProjectionData({overscaledTileID: coord, applyTerrainMatrix: isRenderingGlobe, applyGlobeMatrix: !isRenderingToTexture});
+
     painter.useProgram('heatmapTexture').draw(context, gl.TRIANGLES,
         DepthMode.disabled, StencilMode.disabled, painter.colorModeForRenderPass(), CullFaceMode.disabled,
-        heatmapTextureUniformValues(painter, layer, 0, 1), null,
+        heatmapTextureUniformValues(painter, layer, 0, 1), null, projectionData,
         layer.id, painter.rasterBoundsBuffer, painter.quadTriangleIndexBuffer,
-        painter.rasterBoundsSegments, layer.paint, painter.transform.zoom);
+        painter.rasterBoundsSegments, layer.paint, transform.zoom);
 
     // destroy the FBO after rendering
     fbo.destroy();

@@ -1,6 +1,10 @@
+import {describe, beforeEach, test, expect, vi} from 'vitest';
 import Point from '@mapbox/point-geometry';
-import {arraysIntersect, bezier, clamp, clone, deepEqual, easeCubicInOut, extend, filterObject, findLineIntersection, isCounterClockwise, isPowerOfTwo, keysDifference, mapObject, nextPowerOfTwo, parseCacheControl, pick, readImageDataUsingOffscreenCanvas, readImageUsingVideoFrame, uniqueId, wrap} from './util';
+import {arraysIntersect, bezier, clamp, clone, deepEqual, easeCubicInOut, extend, filterObject, findLineIntersection, isCounterClockwise, isPowerOfTwo, keysDifference, mapObject, nextPowerOfTwo, parseCacheControl, pick, readImageDataUsingOffscreenCanvas, readImageUsingVideoFrame, uniqueId, wrap, mod, distanceOfAnglesRadians, distanceOfAnglesDegrees, differenceOfAnglesRadians, differenceOfAnglesDegrees, solveQuadratic, remapSaturate, getEdgeTiles, radiansToDegrees, degreesToRadians, rollPitchBearingToQuat, getRollPitchBearing, getAngleDelta, scaleZoom, zoomScale, threePlaneIntersection, pointPlaneSignedDistance} from './util';
 import {Canvas} from 'canvas';
+import {OverscaledTileID} from '../tile/tile_id';
+import {expectToBeCloseToArray} from './test/util';
+import {vec3, type vec4} from 'gl-matrix';
 
 describe('util', () => {
     expect(easeCubicInOut(0)).toBe(0);
@@ -112,6 +116,67 @@ describe('util', () => {
         expect(deepEqual(null, c)).toBeFalsy();
         expect(deepEqual(null, null)).toBeTruthy();
     });
+
+    test('mod', () => {
+        expect(mod(2, 3)).toBe(2);
+        expect(mod(4, 3)).toBe(1);
+        expect(mod(-1, 3)).toBe(2);
+        expect(mod(-1, 3)).toBe(2);
+    });
+
+    test('degreesToRadians', () => {
+        expect(degreesToRadians(1.0)).toBe(Math.PI / 180.0);
+    });
+
+    test('radiansToDegrees', () => {
+        expect(radiansToDegrees(1.0)).toBe(180.0 / Math.PI);
+    });
+
+    test('distanceOfAnglesRadians', () => {
+        const digits = 10;
+        expect(distanceOfAnglesRadians(0, 1)).toBeCloseTo(1, digits);
+        expect(distanceOfAnglesRadians(0.1, 2 * Math.PI - 0.1)).toBeCloseTo(0.2, digits);
+        expect(distanceOfAnglesRadians(0.5, -0.5)).toBeCloseTo(1, digits);
+        expect(distanceOfAnglesRadians(-0.5, 0.5)).toBeCloseTo(1, digits);
+    });
+
+    test('distanceOfAnglesDegrees', () => {
+        const digits = 10;
+        expect(distanceOfAnglesDegrees(0, 1)).toBeCloseTo(1, digits);
+        expect(distanceOfAnglesDegrees(10, 350)).toBeCloseTo(20, digits);
+        expect(distanceOfAnglesDegrees(0.5, -0.5)).toBeCloseTo(1, digits);
+        expect(distanceOfAnglesDegrees(-0.5, 0.5)).toBeCloseTo(1, digits);
+    });
+
+    test('differenceOfAnglesRadians', () => {
+        const digits = 10;
+        expect(differenceOfAnglesRadians(0, 1)).toBeCloseTo(1, digits);
+        expect(differenceOfAnglesRadians(0, -1)).toBeCloseTo(-1, digits);
+        expect(differenceOfAnglesRadians(0.1, 2 * Math.PI - 0.1)).toBeCloseTo(-0.2, digits);
+    });
+
+    test('differenceOfAnglesDegrees', () => {
+        const digits = 10;
+        expect(differenceOfAnglesDegrees(0, 1)).toBeCloseTo(1, digits);
+        expect(differenceOfAnglesDegrees(0, -1)).toBeCloseTo(-1, digits);
+        expect(differenceOfAnglesDegrees(10, 350)).toBeCloseTo(-20, digits);
+    });
+
+    test('solveQuadratic', () => {
+        expect(solveQuadratic(0, 0, 0)).toBeNull();
+        expect(solveQuadratic(1, 0, 1)).toBeNull();
+        expect(solveQuadratic(1, 0, -1)).toEqual({t0: 1, t1: 1});
+        expect(solveQuadratic(1, -8, 12)).toEqual({t0: 2, t1: 6});
+    });
+
+    test('remapSaturate', () => {
+        expect(remapSaturate(0, 0, 1, 2, 3)).toBe(2);
+        expect(remapSaturate(1, 0, 2, 2, 3)).toBe(2.5);
+        expect(remapSaturate(999, 0, 2, 2, 3)).toBe(3);
+        expect(remapSaturate(1, 1, 0, 2, 3)).toBe(2);
+        expect(remapSaturate(1, 0, 1, 3, 2)).toBe(2);
+        expect(remapSaturate(1, 1, 0, 3, 2)).toBe(3);
+    });
 });
 
 describe('util clone', () => {
@@ -175,6 +240,80 @@ describe('util isCounterClockwise', () => {
         const c = new Point(1, 1);
 
         expect(isCounterClockwise(c, b, a)).toBe(false);
+    });
+});
+
+describe('util getEdgeTiles', () => {
+    const makeTile = (z: number, x: number, y: number): OverscaledTileID => {
+        return new OverscaledTileID(z, 0, z, x, y);
+    };
+    const arrayKeys = (tileIDs: OverscaledTileID[]) => {
+        return tileIDs.map(id => id.key).sort();
+    };
+    const setKeys = (tileIDs: Set<OverscaledTileID>) => {
+        return Array.from(tileIDs).map(id => id.key).sort();
+    };
+
+    test('returns [] for empty input', () => {
+        expect(getEdgeTiles([])).toEqual(new Set<OverscaledTileID>());
+    });
+
+    test('returns all edge tiles at same zoom', () => {
+        const tiles = [
+            makeTile(2, 0, 0),
+            makeTile(2, 1, 0),
+            makeTile(2, 0, 1),
+            makeTile(2, 1, 1),
+        ];
+        const edges = getEdgeTiles(tiles);
+        expect(setKeys(edges)).toEqual(arrayKeys(tiles));
+    });
+
+    test('returns only edge tiles for a 3x3 block at the same zoom', () => {
+        // 3x3 block of tiles at z=3
+        const tiles: OverscaledTileID[] = [];
+        for (let x = 4; x <= 6; x++) {
+            for (let y = 4; y <= 6; y++) {
+                tiles.push(makeTile(3, x, y));
+            }
+        }
+
+        const edges = getEdgeTiles(tiles);
+
+        // expected: 8 perimeter tiles (center tile (5,5) is not on any edge)
+        const expected = tiles.filter(id => {
+            const {x, y} = id.canonical;
+            return !(x === 5 && y === 5);
+        });
+
+        expect(setKeys(edges)).toEqual(arrayKeys(expected));
+    });
+
+    test('returns only perimeter tiles when mixing coarse and fine', () => {
+        const coarse = [
+            makeTile(2, 0, 0),
+            makeTile(2, 1, 0),
+            makeTile(2, 0, 1),
+            makeTile(2, 1, 1)
+        ];
+        const fine = [
+            makeTile(3, 4, 4),
+            makeTile(3, 5, 4),
+            makeTile(3, 4, 5),
+            makeTile(3, 5, 5)
+        ];
+
+        const allTiles = [...coarse, ...fine];
+        const edges = getEdgeTiles(allTiles);
+
+        // expected: drop (z=2, x=1, y=1) and (z=3, x=4, y=4)
+        const expected = allTiles.filter(id => {
+            const {x, y, z} = id.canonical;
+            return !(z === 2 && x === 1 && y === 1) &&
+                   !(z === 3 && x === 4 && y === 4);
+        });
+
+        expect(setKeys(edges)).toEqual(arrayKeys(expected));
     });
 });
 
@@ -250,13 +389,16 @@ describe('util readImageUsingVideoFrame', () => {
         get format() {
             return format;
         },
-        copyTo: jest.fn(buf => {
+        copyTo: vi.fn(buf => {
             buf.set(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]).subarray(0, buf.length));
             return Promise.resolve();
         }),
-        close: jest.fn(),
+        close: vi.fn(),
     };
-    (window as any).VideoFrame = jest.fn(() => frame);
+    // return the same frame object each time to allow checking of mock calls
+    global.VideoFrame = vi.fn(function() {
+        return frame;
+    }) as any;
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = 2;
 
@@ -299,7 +441,6 @@ describe('util readImageUsingVideoFrame', () => {
 
     describe('layout/rect', () => {
         beforeEach(() => {
-            (window as any).VideoFrame = jest.fn(() => frame);
             canvas.width = canvas.height = 3;
         });
 
@@ -395,7 +536,7 @@ describe('util readImageUsingVideoFrame', () => {
 
 describe('util readImageDataUsingOffscreenCanvas', () => {
     test('reads pixels from image', async () => {
-        (window as any).OffscreenCanvas = Canvas;
+        global.OffscreenCanvas = Canvas as any;
         const image = new Canvas(2, 2);
         const context = image.getContext('2d');
         context.fillStyle = 'rgb(10,0,0)';
@@ -410,5 +551,141 @@ describe('util readImageDataUsingOffscreenCanvas', () => {
             10, 0, 0, 255, 0, 20, 0, 255,
             0, 0, 30, 255, 40, 40, 40, 255,
         ]);
+    });
+});
+
+describe('util rotations', () => {
+    test('rollPitchBearingToQuat', () => {
+        const roll = 10;
+        const pitch = 20;
+        const bearing = 30;
+
+        const rotation = rollPitchBearingToQuat(roll, pitch, bearing);
+        const angles = getRollPitchBearing(rotation);
+
+        expect(angles.roll).toBeCloseTo(roll, 6);
+        expect(angles.pitch).toBeCloseTo(pitch, 6);
+        expect(angles.bearing).toBeCloseTo(bearing, 6);
+    });
+
+    test('rollPitchBearingToQuat sinuglarity', () => {
+        const roll = 10;
+        const pitch = 0;
+        const bearing = 30;
+
+        const rotation = rollPitchBearingToQuat(roll, pitch, bearing);
+        const angles = getRollPitchBearing(rotation);
+
+        expect(angles.pitch).toBeCloseTo(0, 5);
+        expect(wrap(angles.bearing + angles.roll, -180, 180)).toBeCloseTo(wrap(bearing + roll, -180, 180), 6);
+    });
+});
+
+describe('util getAngleDelta', () => {
+    test('positive direction', () => {
+        const lastPoint = new Point(0, 1);
+        const currentPoint = new Point(1, 0);
+        const center = new Point(0, 0);
+
+        expect(getAngleDelta(lastPoint, currentPoint, center)).toBe(90);
+    });
+
+    test('positive direction', () => {
+        const lastPoint = new Point(1, 0);
+        const currentPoint = new Point(0, 1);
+        const center = new Point(0, 0);
+
+        expect(getAngleDelta(lastPoint, currentPoint, center)).toBe(-90);
+    });
+});
+describe('util scaleZoom and zoomScale relation', () => {
+    test('convert and back', () => {
+        expect(scaleZoom(0)).toBe(-Infinity);
+        expect(scaleZoom(10)).toBe(3.3219280948873626);
+        expect(zoomScale(3.3219280948873626)).toBeCloseTo(10, 10);
+        expect(scaleZoom(zoomScale(5))).toBe(5);
+    });
+});
+
+describe('threePlaneIntersection', () => {
+    const precision = 10;
+
+    function createPlane(origin: number[], direction: number[]): vec4 {
+        const normalized = vec3.normalize([] as any, direction as vec3);
+        const dist = vec3.dot(normalized, origin as vec3);
+        return [normalized[0], normalized[1], normalized[2], -dist];
+    }
+
+    test('plane creation helper function', () => {
+        const origin = [-4, 5, -6];
+        const plane = createPlane(origin, [1, 2, 3]);
+        // Plane direction is normalized
+        expect(vec3.length([plane[0], plane[1], plane[2]])).toBeCloseTo(1, precision);
+        // Plane behaves as expected around the origin point
+        expect(pointPlaneSignedDistance(plane, origin as vec3)).toBe(0);
+        expect(pointPlaneSignedDistance(plane, [-4 + 1, 5 + 2, -6 + 3] as vec3)).toBeGreaterThan(0);
+        expect(pointPlaneSignedDistance(plane, [-4 - 1, 5 - 2, -6 - 3] as vec3)).toBeLessThan(0);
+    });
+
+    test('three orthogonal planes at origin', () => {
+        const plane1 = [1, 0, 0, 0] as vec4;
+        const plane2 = [0, 1, 0, 0] as vec4;
+        const plane3 = [0, 0, 1, 0] as vec4;
+        expectToBeCloseToArray([...threePlaneIntersection(plane1, plane2, plane3)], [0, 0, 0], precision);
+    });
+
+    test('three translated orthogonal planes', () => {
+        const plane1 = [1, 0, 0, -3] as vec4;
+        const plane2 = [0, 1, 0, -4] as vec4;
+        const plane3 = [0, 0, 1, -5] as vec4;
+        expectToBeCloseToArray([...threePlaneIntersection(plane1, plane2, plane3)], [3, 4, 5], precision);
+    });
+
+    test('three rotated planes at origin', () => {
+        const origin = [0, 0, 0];
+        const plane1 = createPlane(origin, [1, 2, 3]);
+        const plane2 = createPlane(origin, [-4, 5, 6]);
+        const plane3 = createPlane(origin, [7, -8, 9]);
+        expectToBeCloseToArray([...threePlaneIntersection(plane1, plane2, plane3)], origin, precision);
+    });
+
+    test('three rotated planes placed arbitrarily', () => {
+        const origin = [-4, 5, -6];
+        const plane1 = createPlane(origin, [1, 2, 3]);
+        const plane2 = createPlane(origin, [-4, 5, 6]);
+        const plane3 = createPlane(origin, [7, -8, 9]);
+        const intersection = threePlaneIntersection(plane1, plane2, plane3);
+        expect(pointPlaneSignedDistance(plane1, intersection)).toBeCloseTo(0, precision);
+        expect(pointPlaneSignedDistance(plane2, intersection)).toBeCloseTo(0, precision);
+        expect(pointPlaneSignedDistance(plane3, intersection)).toBeCloseTo(0, precision);
+        expectToBeCloseToArray([...intersection], origin, precision);
+    });
+
+    test('two parallel planes', () => {
+        const plane1 = createPlane([0, 0, 0], [1, 0, 0]);
+        const plane2 = createPlane([1, 0, 0], [1, 0, 0]);
+        const plane3 = createPlane([1, 0, 0], [0, 1, 0]);
+        expect(threePlaneIntersection(plane1, plane2, plane3)).toBeNull();
+    });
+
+    test('three parallel planes', () => {
+        const plane1 = createPlane([0, 0, 0], [1, 0, 0]);
+        const plane2 = createPlane([1, 0, 0], [1, 0, 0]);
+        const plane3 = createPlane([2, 0, 0], [1, 0, 0]);
+        expect(threePlaneIntersection(plane1, plane2, plane3)).toBeNull();
+    });
+
+    test('planes form an infinite triangle wedge', () => {
+        const plane1 = createPlane([0, 0, 0], [1, 0, 0]);
+        const plane2 = createPlane([0, 0, 0], [0, 1, 0]);
+        const plane3 = createPlane([2, 2, 0], [1, 1, 0]);
+        expect(threePlaneIntersection(plane1, plane2, plane3)).toBeNull();
+    });
+
+    test('planes intersection is a line', () => {
+        const plane1 = createPlane([0, 0, 0], [1, 0, 0]);
+        const plane2 = createPlane([0, 0, 0], [0, 1, 0]);
+        const plane3 = createPlane([0, 0, 0], [1, 1, 0]);
+        expect(threePlaneIntersection(plane1, plane2, plane3)).toBeNull();
     });
 });

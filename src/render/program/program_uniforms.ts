@@ -1,18 +1,22 @@
 import {fillExtrusionUniforms, fillExtrusionPatternUniforms} from './fill_extrusion_program';
-import {fillUniforms, fillPatternUniforms, fillOutlineUniforms, fillOutlinePatternUniforms} from './fill_program';
+import {fillPatternUniforms, fillOutlineUniforms, fillOutlinePatternUniforms, fillUniforms} from './fill_program';
 import {circleUniforms} from './circle_program';
 import {collisionUniforms, collisionCircleUniforms} from './collision_program';
 import {debugUniforms} from './debug_program';
-import {clippingMaskUniforms} from './clipping_mask_program';
 import {heatmapUniforms, heatmapTextureUniforms} from './heatmap_program';
 import {fillHeatmapUniforms, fillHeatmapTextureUniforms} from './fill_heatmap_program';
 import {hillshadeUniforms, hillshadePrepareUniforms} from './hillshade_program';
-import {lineUniforms, lineGradientUniforms, linePatternUniforms, lineSDFUniforms} from './line_program';
+import {colorReliefUniforms} from './color_relief_program';
+import {lineUniforms, lineGradientUniforms, linePatternUniforms, lineSDFUniforms, lineGradientSDFUniforms} from './line_program';
 import {rasterUniforms} from './raster_program';
 import {symbolIconUniforms, symbolSDFUniforms, symbolTextAndIconUniforms} from './symbol_program';
 import {backgroundUniforms, backgroundPatternUniforms} from './background_program';
 import {terrainUniforms, terrainDepthUniforms, terrainCoordsUniforms} from './terrain_program';
+import {projectionErrorMeasurementUniforms} from './projection_error_measurement_program';
+import {atmosphereUniforms} from './atmosphere_program';
 import {skyUniforms} from './sky_program';
+
+const emptyUniforms = (_: any, __: any): any => {};
 
 export const programUniforms = {
     fillExtrusion: fillExtrusionUniforms,
@@ -25,17 +29,20 @@ export const programUniforms = {
     collisionBox: collisionUniforms,
     collisionCircle: collisionCircleUniforms,
     debug: debugUniforms,
-    clippingMask: clippingMaskUniforms,
+    depth: emptyUniforms,
+    clippingMask: emptyUniforms,
     heatmap: heatmapUniforms,
     heatmapTexture: heatmapTextureUniforms,
     fillHeatmap: fillHeatmapUniforms,
     fillHeatmapTexture: fillHeatmapTextureUniforms,
     hillshade: hillshadeUniforms,
     hillshadePrepare: hillshadePrepareUniforms,
+    colorRelief: colorReliefUniforms,
     line: lineUniforms,
     lineGradient: lineGradientUniforms,
     linePattern: linePatternUniforms,
     lineSDF: lineSDFUniforms,
+    lineGradientSDF: lineGradientSDFUniforms,
     raster: rasterUniforms,
     symbolIcon: symbolIconUniforms,
     symbolSDF: symbolSDFUniforms,
@@ -45,5 +52,7 @@ export const programUniforms = {
     terrain: terrainUniforms,
     terrainDepth: terrainDepthUniforms,
     terrainCoords: terrainCoordsUniforms,
+    projectionErrorMeasurement: projectionErrorMeasurementUniforms,
+    atmosphere: atmosphereUniforms,
     sky: skyUniforms
 };

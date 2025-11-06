@@ -1,4 +1,4 @@
-import {AddProtocolAction, config} from '../util/config';
+import {type AddProtocolAction, config} from '../util/config';
 
 export function getProtocol(url: string) {
     return config.REGISTERED_PROTOCOLS[url.substring(0, url.indexOf('://'))];
@@ -26,7 +26,7 @@ export function getProtocol(url: string) {
  *  });
  * // the following is an example of a way to return an error when trying to load a tile
  * addProtocol('custom2', async (params, abortController) => {
- *      throw new Error('someErrorMessage'));
+ *      throw new Error('someErrorMessage');
  * });
  * ```
  */

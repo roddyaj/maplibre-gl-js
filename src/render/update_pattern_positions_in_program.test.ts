@@ -1,5 +1,6 @@
-import {Tile} from '../source/tile';
-import {OverscaledTileID} from '../source/tile_id';
+import {describe, test, expect, vi} from 'vitest';
+import {Tile} from '../tile/tile';
+import {OverscaledTileID} from '../tile/tile_id';
 import {updatePatternPositionsInProgram} from './update_pattern_positions_in_program';
 import {FillStyleLayer} from '../style/style_layer/fill_style_layer';
 import type {CrossFaded} from '../style/properties';
@@ -17,7 +18,7 @@ interface MockProgramConfiguration extends ProgramConfiguration {
 
 function constructMockProgramConfiguration(): MockProgramConfiguration {
     const mockProgramConfiguration: MockProgramConfiguration = {patternPositions: {}} as any;
-    mockProgramConfiguration.updatePaintBuffers = jest.fn();
+    mockProgramConfiguration.updatePaintBuffers = vi.fn();
     mockProgramConfiguration.setConstantPatternPositions = (posFrom: ImagePosition, posTo: ImagePosition) => {
         // this does not exist on ProgramConfiguration but we want to test the resulting output
         mockProgramConfiguration.patternPositions = {posFrom: posFrom.paddedRect, posTo: posTo.paddedRect};
@@ -42,7 +43,7 @@ function constructMockFillStyleLayer(): FillStyleLayer {
             ]
         }
     } as FillLayerSpecification;
-    const layer = new FillStyleLayer(layerSpec);
+    const layer = new FillStyleLayer(layerSpec, {});
     return layer;
 }
 

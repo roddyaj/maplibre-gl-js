@@ -5,8 +5,9 @@ import type {StyleImage} from '../style/style_image';
 import type {StyleGlyph} from '../style/style_glyph';
 import type {PluginState} from '../source/rtl_text_plugin_status';
 import type {LayerSpecification} from '@maplibre/maplibre-gl-style-spec';
-import type {OverscaledTileID} from '../source/tile_id';
+import type {OverscaledTileID} from '../tile/tile_id';
 import type {GetResourceResponse, RequestParameters} from './ajax';
+import type {DashEntry} from '../render/line_atlas';
 
 /**
  * The parameters needed in order to get information about the cluster
@@ -26,6 +27,7 @@ export type GetClusterLeavesParams = ClusterIDAndSource & { limit: number; offse
  * The result of the call to load a geojson source
  */
 export type GeoJSONWorkerSourceLoadDataResult = {
+    data?: GeoJSON.GeoJSON;
     resourceTiming?: {[_: string]: Array<PerformanceResourceTiming>};
     abandoned?: boolean;
 };
@@ -36,15 +38,15 @@ export type GeoJSONWorkerSourceLoadDataResult = {
 export type RemoveSourceParams = {
     source: string;
     type: string;
-}
+};
 
 /**
  * Parameters needed to update the layers
  */
-export type UpdateLayersParamaeters = {
+export type UpdateLayersParameters = {
     layers: Array<LayerSpecification>;
     removedIds: Array<string>;
-}
+};
 
 /**
  * Parameters needed to get the images
@@ -54,7 +56,7 @@ export type GetImagesParameters = {
     source: string;
     tileID: OverscaledTileID;
     type: string;
-}
+};
 
 /**
  * Parameters needed to get the glyphs
@@ -64,7 +66,7 @@ export type GetGlyphsParameters = {
     stacks: {[_: string]: Array<number>};
     source: string;
     tileID: OverscaledTileID;
-}
+};
 
 /**
  * A response object returned when requesting glyphs
@@ -73,12 +75,27 @@ export type GetGlyphsResponse = {
     [stack: string]: {
         [id: number]: StyleGlyph;
     };
-}
+};
 
 /**
  * A response object returned when requesting images
  */
-export type GetImagesResponse = {[_: string]: StyleImage}
+export type GetImagesResponse = {[_: string]: StyleImage};
+
+/**
+ * Parameters needed to get the line dashes
+ */
+export type GetDashesParameters = {
+    dashes: {[key: string]: {
+        dasharray: Array<number>;
+        round: boolean;
+    };};
+};
+
+/**
+ * A response object returned when requesting line dashes
+ */
+export type GetDashesResponse = {[dashId: string]: DashEntry};
 
 /**
  * All the possible message types that can be sent to and from the worker
@@ -93,8 +110,10 @@ export const enum MessageType {
     loadTile = 'LT',
     reloadTile = 'RT',
     getGlyphs = 'GG',
+    getDashes = 'GDA',
     getImages = 'GI',
     setImages = 'SI',
+    updateGlobalState = 'UGS',
     setLayers = 'SL',
     updateLayers = 'UL',
     syncRTLPluginState = 'SRPS',
@@ -124,8 +143,9 @@ export type RequestResponseMessageMap = {
     [MessageType.getGlyphs]: [GetGlyphsParameters, GetGlyphsResponse];
     [MessageType.getImages]: [GetImagesParameters, GetImagesResponse];
     [MessageType.setImages]: [string[], void];
+    [MessageType.updateGlobalState]: [Record<string, any>, void];
     [MessageType.setLayers]: [Array<LayerSpecification>, void];
-    [MessageType.updateLayers]: [UpdateLayersParamaeters, void];
+    [MessageType.updateLayers]: [UpdateLayersParameters, void];
     [MessageType.syncRTLPluginState]: [PluginState, PluginState];
     [MessageType.setReferrer]: [string, void];
     [MessageType.removeSource]: [RemoveSourceParams, void];
@@ -135,7 +155,8 @@ export type RequestResponseMessageMap = {
     [MessageType.abortTile]: [TileParameters, void];
     [MessageType.removeDEMTile]: [TileParameters, void];
     [MessageType.getResource]: [RequestParameters, GetResourceResponse<any>];
-}
+    [MessageType.getDashes]: [GetDashesParameters, GetDashesResponse];
+};
 
 /**
  * The message to be sent by the actor

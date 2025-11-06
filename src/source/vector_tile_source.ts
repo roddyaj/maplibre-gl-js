@@ -2,22 +2,22 @@ import {Event, ErrorEvent, Evented} from '../util/evented';
 
 import {extend, pick} from '../util/util';
 import {loadTileJson} from './load_tilejson';
-import {TileBounds} from './tile_bounds';
+import {TileBounds} from '../tile/tile_bounds';
 import {ResourceType} from '../util/request_manager';
 
 import type {Source} from './source';
-import type {OverscaledTileID} from './tile_id';
+import type {OverscaledTileID} from '../tile/tile_id';
 import type {Map} from '../ui/map';
 import type {Dispatcher} from '../util/dispatcher';
-import type {Tile} from './tile';
+import type {Tile} from '../tile/tile';
 import type {VectorSourceSpecification, PromoteIdSpecification} from '@maplibre/maplibre-gl-style-spec';
-import type {WorkerTileResult} from './worker_source';
+import type {WorkerTileParameters, WorkerTileResult} from './worker_source';
 import {MessageType} from '../util/actor_messages';
 
 export type VectorTileSourceOptions = VectorSourceSpecification & {
     collectResourceTiming?: boolean;
     tileSize?: number;
-}
+};
 
 /**
  * A source containing vector tiles in [Mapbox Vector Tile format](https://docs.mapbox.com/vector-tiles/reference/).
@@ -52,7 +52,7 @@ export type VectorTileSourceOptions = VectorSourceSpecification & {
  * ```ts
  * map.getSource('some id').setTiles(['https://d25uarhxywzl1j.cloudfront.net/v0.1/{z}/{x}/{y}.mvt']);
  * ```
- * @see [Add a vector tile source](https://maplibre.org/maplibre-gl-js/docs/examples/vector-source/)
+ * @see [Add a vector tile source](https://maplibre.org/maplibre-gl-js/docs/examples/add-a-vector-tile-source/)
  */
 export class VectorTileSource extends Evented implements Source {
     type: 'vector';
@@ -110,12 +110,12 @@ export class VectorTileSource extends Evented implements Source {
             const tileJSON = await loadTileJson(this._options, this.map._requestManager, this._tileJSONRequest);
             this._tileJSONRequest = null;
             this._loaded = true;
-            this.map.style.sourceCaches[this.id].clearTiles();
+            this.map.style.tileManagers[this.id].clearTiles();
             if (tileJSON) {
                 extend(this, tileJSON);
                 if (tileJSON.bounds) this.tileBounds = new TileBounds(tileJSON.bounds, this.minzoom, this.maxzoom);
 
-                // `content` is included here to prevent a race condition where `Style#_updateSources` is called
+                // `content` is included here to prevent a race condition where `Style._updateSources` is called
                 // before the TileJSON arrives. this makes sure the tiles needed are loaded once TileJSON arrives
                 // ref: https://github.com/mapbox/mapbox-gl-js/pull/4347#discussion_r104418088
                 this.fire(new Event('data', {dataType: 'source', sourceDataType: 'metadata'}));
@@ -123,6 +123,7 @@ export class VectorTileSource extends Evented implements Source {
             }
         } catch (err) {
             this._tileJSONRequest = null;
+            this._loaded = true; // let's pretend it's loaded so the source will be ignored
             this.fire(new ErrorEvent(err));
         }
     }
@@ -190,7 +191,7 @@ export class VectorTileSource extends Evented implements Source {
 
     async loadTile(tile: Tile): Promise<void> {
         const url = tile.tileID.canonical.url(this.tiles, this.map.getPixelRatio(), this.scheme);
-        const params = {
+        const params: WorkerTileParameters = {
             request: this.map._requestManager.transformRequest(url, ResourceType.Tile),
             uid: tile.uid,
             tileID: tile.tileID,
@@ -200,7 +201,8 @@ export class VectorTileSource extends Evented implements Source {
             source: this.id,
             pixelRatio: this.map.getPixelRatio(),
             showCollisionBoxes: this.map.showCollisionBoxes,
-            promoteId: this.promoteId
+            promoteId: this.promoteId,
+            subdivisionGranularity: this.map.style.projection.subdivisionGranularity
         };
         params.request.collectResourceTiming = this._collectResourceTiming;
         let messageType: MessageType.loadTile | MessageType.reloadTile = MessageType.reloadTile;

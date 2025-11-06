@@ -1,8 +1,5 @@
 import {createAbortError} from './abort_error';
-
-const now = typeof performance !== 'undefined' && performance && performance.now ?
-    performance.now.bind(performance) :
-    Date.now.bind(Date);
+import {subscribe} from './util';
 
 let linkEl;
 
@@ -10,19 +7,22 @@ let reducedMotionQuery: MediaQueryList;
 
 /** */
 export const browser = {
-    /**
-     * Provides a function that outputs milliseconds: either performance.now()
-     * or a fallback to Date.now()
-     */
-    now,
+    frame(abortController: AbortController, fn: (paintStartTimestamp: number) => void, reject: (error: Error) => void): void {
+        const frameId = requestAnimationFrame((paintStartTimestamp)=>{
+            unsubscribe();
+            fn(paintStartTimestamp);
+        });
+
+        const {unsubscribe} = subscribe(abortController.signal, 'abort', () => {
+            unsubscribe();
+            cancelAnimationFrame(frameId);
+            reject(createAbortError());
+        }, false);
+    },
 
     frameAsync(abortController: AbortController): Promise<number> {
         return new Promise((resolve, reject) => {
-            const frame = requestAnimationFrame(resolve);
-            abortController.signal.addEventListener('abort', () => {
-                cancelAnimationFrame(frame);
-                reject(createAbortError());
-            });
+            this.frame(abortController, resolve, reject);
         });
     },
 

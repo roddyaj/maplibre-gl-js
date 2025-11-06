@@ -6,17 +6,14 @@ import {
     Uniform2f,
     UniformMatrix4f
 } from '../uniform_binding';
-import {pixelsToTileUnits} from '../../source/pixels_to_tile_units';
 
 import type {Context} from '../../gl/context';
-import type {Tile} from '../../source/tile';
 import type {UniformValues, UniformLocations} from '../uniform_binding';
 import type {Painter} from '../painter';
 import type {FillHeatmapStyleLayer} from '../../style/style_layer/fill_heatmap_style_layer';
 
 export type FillHeatmapUniformsType = {
-    'u_extrude_scale': Uniform1f;
-    'u_matrix': UniformMatrix4f;
+    'u_fill_translate': Uniform2f;
 };
 
 export type FillHeatmapTextureUniformsType = {
@@ -32,8 +29,7 @@ export type FillHeatmapTextureUniformsType = {
 };
 
 const fillHeatmapUniforms = (context: Context, locations: UniformLocations): FillHeatmapUniformsType => ({
-    'u_extrude_scale': new Uniform1f(context, locations.u_extrude_scale),
-    'u_matrix': new UniformMatrix4f(context, locations.u_matrix)
+    'u_fill_translate': new Uniform2f(context, locations.u_fill_translate)
 });
 
 const fillHeatmapTextureUniforms = (context: Context, locations: UniformLocations): FillHeatmapTextureUniformsType => ({
@@ -48,9 +44,8 @@ const fillHeatmapTextureUniforms = (context: Context, locations: UniformLocation
     'u_limit_count': new Uniform1f(context, locations.u_limit_count)
 });
 
-const fillHeatmapUniformValues = (matrix: mat4, tile: Tile, zoom: number): UniformValues<FillHeatmapUniformsType> => ({
-    'u_matrix': matrix,
-    'u_extrude_scale': pixelsToTileUnits(tile, 1, zoom),
+const fillHeatmapUniformValues = (translate: [number, number]): UniformValues<FillHeatmapUniformsType> => ({
+    'u_fill_translate': translate,
 });
 
 const fillHeatmapTextureUniformValues = (

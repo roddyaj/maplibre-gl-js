@@ -12,7 +12,7 @@ import {loadGeometry} from '../load_geometry';
 import {toEvaluationFeature} from '../evaluation_feature';
 import {EvaluationParameters} from '../../style/evaluation_parameters';
 
-import type {CanonicalTileID} from '../../source/tile_id';
+import type {CanonicalTileID} from '../../tile/tile_id';
 import type {
     Bucket,
     BucketParameters,
@@ -44,7 +44,7 @@ export class FillHeatmapBucket implements Bucket {
     indexArray: TriangleIndexArray;
     indexBuffer: IndexBuffer;
 
-    hasPattern: boolean;
+    hasDependencies: boolean;
     programConfigurations: ProgramConfigurationSet<FillHeatmapStyleLayer>;
     segments: SegmentVector;
     uploaded: boolean;
@@ -55,7 +55,7 @@ export class FillHeatmapBucket implements Bucket {
         this.layers = options.layers;
         this.layerIds = this.layers.map(layer => layer.id);
         this.index = options.index;
-        this.hasPattern = false;
+        this.hasDependencies = false;
 
         this.layoutVertexArray = new FillLayoutArray();
         this.indexArray = new TriangleIndexArray();
@@ -100,7 +100,9 @@ export class FillHeatmapBucket implements Bucket {
         [_: string]: ImagePosition;
     }) {
         if (!this.stateDependentLayers.length) return;
-        this.programConfigurations.updatePaintArrays(states, vtLayer, this.stateDependentLayers, imagePositions);
+        this.programConfigurations.updatePaintArrays(states, vtLayer, this.stateDependentLayers, {
+            imagePositions
+        });
     }
 
     isEmpty() {
@@ -174,7 +176,7 @@ export class FillHeatmapBucket implements Bucket {
             triangleSegment.vertexLength += numVertices;
             triangleSegment.primitiveLength += indices.length / 3;
         }
-        this.programConfigurations.populatePaintArrays(this.layoutVertexArray.length, feature, index, imagePositions, canonical);
+        this.programConfigurations.populatePaintArrays(this.layoutVertexArray.length, feature, index, {imagePositions, canonical});
     }
 }
 

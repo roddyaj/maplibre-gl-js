@@ -1,15 +1,15 @@
 import {clone, extend, easeCubicInOut} from '../util/util';
-import {interpolates, Color, StylePropertySpecification, normalizePropertyExpression,
-    Feature,
-    FeatureState,
-    StylePropertyExpression,
-    SourceExpression,
-    CompositeExpression, TransitionSpecification,
-    PropertyValueSpecification} from '@maplibre/maplibre-gl-style-spec';
+import {interpolates, type Color, type StylePropertySpecification, normalizePropertyExpression,
+    type Feature,
+    type FeatureState,
+    type StylePropertyExpression,
+    type SourceExpression,
+    type CompositeExpression, type TransitionSpecification,
+    type PropertyValueSpecification} from '@maplibre/maplibre-gl-style-spec';
 import {register} from '../util/web_worker_transfer';
 import {EvaluationParameters} from './evaluation_parameters';
 
-import {CanonicalTileID} from '../source/tile_id';
+import {type CanonicalTileID} from '../tile/tile_id';
 
 type TimePoint = number;
 
@@ -72,14 +72,18 @@ export class PropertyValue<T, R> {
     value: PropertyValueSpecification<T> | void;
     expression: StylePropertyExpression;
 
-    constructor(property: Property<T, R>, value: PropertyValueSpecification<T> | void) {
+    constructor(property: Property<T, R>, value: PropertyValueSpecification<T> | void, globalState: Record<string, any>) {
         this.property = property;
         this.value = value;
-        this.expression = normalizePropertyExpression(value === undefined ? property.specification.default : value, property.specification);
+        this.expression = normalizePropertyExpression(value === undefined ? property.specification.default : value, property.specification, globalState);
     }
 
     isDataDriven(): boolean {
         return this.expression.kind === 'source' || this.expression.kind === 'composite';
+    }
+
+    getGlobalStateRefs(): Set<string> {
+        return this.expression.globalStateRefs || new Set<string>();
     }
 
     possiblyEvaluate(
@@ -112,9 +116,9 @@ class TransitionablePropertyValue<T, R> {
     value: PropertyValue<T, R>;
     transition: TransitionSpecification | void;
 
-    constructor(property: Property<T, R>) {
+    constructor(property: Property<T, R>, globalState: Record<string, any>) {
         this.property = property;
-        this.value = new PropertyValue(property, undefined);
+        this.value = new PropertyValue(property, undefined, globalState);
     }
 
     transitioned(parameters: TransitionParameters, prior: TransitioningPropertyValue<T, R>): TransitioningPropertyValue<T, R> {
@@ -136,10 +140,12 @@ class TransitionablePropertyValue<T, R> {
 export class Transitionable<Props> {
     _properties: Properties<Props>;
     _values: {[K in keyof Props]: TransitionablePropertyValue<any, unknown>};
+    private _globalState: Record<string, any>;
 
-    constructor(properties: Properties<Props>) {
+    constructor(properties: Properties<Props>, globalState: Record<string, any>) {
         this._properties = properties;
         this._values = (Object.create(properties.defaultTransitionablePropertyValues) as any);
+        this._globalState = globalState;
     }
 
     getValue<S extends keyof Props, T>(name: S): PropertyValueSpecification<T> | void {
@@ -148,11 +154,11 @@ export class Transitionable<Props> {
 
     setValue<S extends keyof Props, T>(name: S, value: PropertyValueSpecification<T> | void) {
         if (!Object.prototype.hasOwnProperty.call(this._values, name)) {
-            this._values[name] = new TransitionablePropertyValue(this._values[name].property);
+            this._values[name] = new TransitionablePropertyValue(this._values[name].property, this._globalState);
         }
         // Note that we do not _remove_ an own property in the case where a value is being reset
         // to the default: the transition might still be non-default.
-        this._values[name].value = new PropertyValue(this._values[name].property, value === null ? undefined : clone(value));
+        this._values[name].value = new PropertyValue(this._values[name].property, value === null ? undefined : clone(value), this._globalState);
     }
 
     getTransition<S extends keyof Props>(name: S): TransitionSpecification | void {
@@ -161,7 +167,7 @@ export class Transitionable<Props> {
 
     setTransition<S extends keyof Props>(name: S, value: TransitionSpecification | void) {
         if (!Object.prototype.hasOwnProperty.call(this._values, name)) {
-            this._values[name] = new TransitionablePropertyValue(this._values[name].property);
+            this._values[name] = new TransitionablePropertyValue(this._values[name].property, this._globalState);
         }
         this._values[name].transition = clone(value) || undefined;
     }
@@ -311,10 +317,12 @@ export class Transitioning<Props> {
 export class Layout<Props> {
     _properties: Properties<Props>;
     _values: {[K in keyof Props]: PropertyValue<any, PossiblyEvaluatedPropertyValue<any>>};
+    private _globalState: Record<string, any>; // reference to global state
 
-    constructor(properties: Properties<Props>) {
+    constructor(properties: Properties<Props>, globalState: Record<string, any>) {
         this._properties = properties;
         this._values = (Object.create(properties.defaultPropertyValues) as any);
+        this._globalState = globalState;
     }
 
     hasValue<S extends keyof Props>(name: S) {
@@ -326,7 +334,7 @@ export class Layout<Props> {
     }
 
     setValue<S extends keyof Props>(name: S, value: any) {
-        this._values[name] = new PropertyValue(this._values[name].property, value === null ? undefined : clone(value)) as any;
+        this._values[name] = new PropertyValue(this._values[name].property, value === null ? undefined : clone(value), this._globalState) as any;
     }
 
     serialize() {
@@ -506,12 +514,12 @@ export class DataDrivenProperty<T> implements Property<T, PossiblyEvaluatedPrope
         }
 
         // Special case hack solely for fill-outline-color. The undefined value is subsequently handled in
-        // FillStyleLayer#recalculate, which sets fill-outline-color to the fill-color value if the former
+        // FillStyleLayer.recalculate, which sets fill-outline-color to the fill-color value if the former
         // is a PossiblyEvaluatedPropertyValue containing a constant undefined value. In addition to the
         // return value here, the other source of a PossiblyEvaluatedPropertyValue containing a constant
         // undefined value is the "default value" for fill-outline-color held in
-        // `Properties#defaultPossiblyEvaluatedValues`, which serves as the prototype of
-        // `PossiblyEvaluated#_values`.
+        // `Properties.defaultPossiblyEvaluatedValues`, which serves as the prototype of
+        // `PossiblyEvaluated._values`.
         if (a.value.value === undefined || b.value.value === undefined) {
             return new PossiblyEvaluatedPropertyValue(this, {kind: 'constant', value: undefined}, a.parameters);
         }
@@ -708,9 +716,9 @@ export class Properties<Props> {
                 this.overridableProperties.push(property);
             }
             const defaultPropertyValue = this.defaultPropertyValues[property] =
-                new PropertyValue(prop, undefined);
+                new PropertyValue(prop, undefined, undefined);
             const defaultTransitionablePropertyValue = this.defaultTransitionablePropertyValues[property] =
-                new TransitionablePropertyValue(prop);
+                new TransitionablePropertyValue(prop, undefined);
             this.defaultTransitioningPropertyValues[property] =
                 defaultTransitionablePropertyValue.untransitioned();
             this.defaultPossiblyEvaluatedValues[property] =

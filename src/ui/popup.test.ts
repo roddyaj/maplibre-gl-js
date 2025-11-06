@@ -1,9 +1,10 @@
+import {describe, beforeEach, test, expect, vi} from 'vitest';
 import {createMap as globalCreateMap, beforeMapTest} from '../util/test/util';
-import {Popup, Offset} from './popup';
+import {Popup, type Offset} from './popup';
 import {LngLat} from '../geo/lng_lat';
 import Point from '@mapbox/point-geometry';
 import simulate from '../../test/unit/lib/simulate_interaction';
-import {PositionAnchor} from './anchor';
+import {type PositionAnchor} from './anchor';
 
 const containerWidth = 512;
 const containerHeight = 512;
@@ -23,7 +24,7 @@ beforeEach(() => {
 
 describe('popup', () => {
 
-    test('Popup#getElement returns a .maplibregl-popup element', () => {
+    test('Popup.getElement returns a .maplibregl-popup element', () => {
         const map = createMap();
         const popup = new Popup()
             .setText('Test')
@@ -34,7 +35,7 @@ describe('popup', () => {
         expect(popup.getElement().classList.contains('maplibregl-popup')).toBeTruthy();
     });
 
-    test('Popup#addTo adds a .maplibregl-popup element', () => {
+    test('Popup.addTo adds a .maplibregl-popup element', () => {
         const map = createMap();
         const popup = new Popup()
             .setText('Test')
@@ -120,39 +121,39 @@ describe('popup', () => {
 
     test('Popup fires close event when removed', () => {
         const map = createMap();
-        const onClose = jest.fn();
+        const onClose = vi.fn();
 
-        new Popup()
+        const popup = new Popup()
             .setText('Test')
-            .setLngLat([0, 0])
-            .on('close', onClose)
-            .addTo(map)
-            .remove();
+            .setLngLat([0, 0]);
+        popup.on('close', onClose);
+        popup.addTo(map);
+        popup.remove();
 
         expect(onClose).toHaveBeenCalled();
     });
 
     test('Popup does not fire close event when removed if it is not on the map', () => {
-        const onClose = jest.fn();
+        const onClose = vi.fn();
 
-        new Popup()
+        const popup = new Popup()
             .setText('Test')
-            .setLngLat([0, 0])
-            .on('close', onClose)
-            .remove();
+            .setLngLat([0, 0]);
+        popup.on('close', onClose);
+        popup.remove();
 
         expect(onClose).not.toHaveBeenCalled();
     });
 
     test('Popup fires open event when added', () => {
         const map = createMap();
-        const onOpen = jest.fn();
+        const onOpen = vi.fn();
 
-        new Popup()
+        const popup = new Popup()
             .setText('Test')
-            .setLngLat([0, 0])
-            .on('open', onOpen)
-            .addTo(map);
+            .setLngLat([0, 0]);
+        popup.on('open', onOpen);
+        popup.addTo(map);
 
         expect(onOpen).toHaveBeenCalled();
     });
@@ -225,7 +226,7 @@ describe('popup', () => {
         expect(popup.getElement().querySelector('.maplibregl-popup-content').firstChild).toBe(content);
     });
 
-    test('Popup#setText protects against XSS', () => {
+    test('Popup.setText protects against XSS', () => {
         const map = createMap();
 
         const popup = new Popup({closeButton: false})
@@ -344,6 +345,22 @@ describe('popup', () => {
         expect(popup._pos).toEqual(map.project([-5, 0]));
     });
 
+    test('Popup\'s lng is wrapped when slightly crossing 180 with zoomed out globe', async () => {
+        const map = createMap({width: 1024, renderWorldCopies: true});
+        await map.once('load');
+        map.setProjection({type: 'globe'});
+        map.setZoom(0);
+
+        const popup = new Popup()
+            .setLngLat([179, 0])
+            .setText('Test')
+            .addTo(map);
+
+        popup.setLngLat([181, 0]);
+
+        expect(popup._lngLat.lng).toBe(-179);
+    });
+
     test('Popup is repositioned at the specified LngLat', () => {
         const map = createMap({width: 1024}); // longitude bounds: [-360, 360]
         map.terrain = {
@@ -393,7 +410,7 @@ describe('popup', () => {
             Object.defineProperty(popup.getElement(), 'offsetWidth', {value: 100});
             Object.defineProperty(popup.getElement(), 'offsetHeight', {value: 100});
 
-            jest.spyOn(map, 'project').mockReturnValue(point);
+            vi.spyOn(map, 'project').mockReturnValue(point);
             popup.setLngLat([0, 0]);
 
             expect(popup.getElement().classList.contains(`maplibregl-popup-anchor-${anchor}`)).toBeTruthy();
@@ -401,7 +418,7 @@ describe('popup', () => {
 
         test(`Popup translation reflects offset and ${anchor} anchor`, () => {
             const map = createMap();
-            jest.spyOn(map, 'project').mockReturnValue(new Point(0, 0));
+            vi.spyOn(map, 'project').mockReturnValue(new Point(0, 0));
 
             const popup = new Popup({anchor, offset: 10})
                 .setLngLat([0, 0])
@@ -427,7 +444,7 @@ describe('popup', () => {
         Object.defineProperty(popup.getElement(), 'offsetWidth', {value: containerWidth / 2});
         Object.defineProperty(popup.getElement(), 'offsetHeight', {value: containerHeight / 2});
 
-        jest.spyOn(map, 'project').mockReturnValue(point);
+        vi.spyOn(map, 'project').mockReturnValue(point);
         popup.setLngLat([0, 0]);
 
         expect(popup.getElement().classList.contains('maplibregl-popup-anchor-top')).toBeTruthy();
@@ -435,7 +452,7 @@ describe('popup', () => {
 
     test('Popup is offset via a PointLike offset option', () => {
         const map = createMap();
-        jest.spyOn(map, 'project').mockReturnValue(new Point(0, 0));
+        vi.spyOn(map, 'project').mockReturnValue(new Point(0, 0));
 
         const popup = new Popup({anchor: 'top-left', offset: [5, 10]})
             .setLngLat([0, 0])
@@ -447,7 +464,7 @@ describe('popup', () => {
 
     test('Popup is offset via an object offset option', () => {
         const map = createMap();
-        jest.spyOn(map, 'project').mockReturnValue(new Point(0, 0));
+        vi.spyOn(map, 'project').mockReturnValue(new Point(0, 0));
 
         const popup = new Popup({anchor: 'top-left', offset: {'top-left': [5, 10]} as Offset})
             .setLngLat([0, 0])
@@ -459,7 +476,7 @@ describe('popup', () => {
 
     test('Popup is offset via an incomplete object offset option', () => {
         const map = createMap();
-        jest.spyOn(map, 'project').mockReturnValue(new Point(0, 0));
+        vi.spyOn(map, 'project').mockReturnValue(new Point(0, 0));
 
         const popup = new Popup({anchor: 'top-right', offset: {'top-left': [5, 10]} as Offset})
             .setLngLat([0, 0])
@@ -497,7 +514,21 @@ describe('popup', () => {
         expect(map.getContainer().querySelectorAll('.maplibregl-popup')).toHaveLength(1);
     });
 
-    test('Popup#addTo is idempotent (#1811)', () => {
+    test('Popup can be removed and added again can be closed with click (#5576)', () => {
+        const map = createMap();
+
+        new Popup()
+            .setText('Test')
+            .setLngLat([0, 0])
+            .addTo(map)
+            .addTo(map);
+
+        (map.getContainer().querySelector('.maplibregl-popup-close-button') as HTMLButtonElement).click();
+
+        expect(map.getContainer().querySelectorAll('.maplibregl-popup')).toHaveLength(0);
+    });
+
+    test('Popup.addTo is idempotent (#1811)', () => {
         const map = createMap();
 
         const popup = new Popup({closeButton: false})
@@ -509,7 +540,7 @@ describe('popup', () => {
         expect(popup.getElement().querySelector('.maplibregl-popup-content').textContent).toBe('Test');
     });
 
-    test('Popup#remove is idempotent (#2395)', () => {
+    test('Popup.remove is idempotent (#2395)', () => {
         const map = createMap();
 
         new Popup({closeButton: false})
@@ -623,7 +654,7 @@ describe('popup', () => {
         ).not.toContain('maplibregl-track-pointer');
     });
 
-    test('Pointer-tracked popup calling Popup#remove removes track-pointer class from map (#3434)', () => {
+    test('Pointer-tracked popup calling Popup.remove removes track-pointer class from map (#3434)', () => {
         const map = createMap();
         new Popup()
             .setText('Test')
@@ -660,7 +691,7 @@ describe('popup', () => {
         expect(popup._pos).toEqual({x: 0, y: 0});
     });
 
-    test('Popup closes on Map#remove', () => {
+    test('Popup closes on Map.remove', () => {
         const map = createMap();
         const popup = new Popup()
             .setText('Test')
@@ -672,7 +703,7 @@ describe('popup', () => {
         expect(!popup.isOpen()).toBeTruthy();
     });
 
-    test('Adding popup with no focusable content (Popup#setText) does not change the active element', () => {
+    test('Adding popup with no focusable content (Popup.setText) does not change the active element', () => {
         const dummyFocusedEl = window.document.createElement('button');
         window.document.body.appendChild(dummyFocusedEl);
         dummyFocusedEl.focus();
@@ -685,7 +716,7 @@ describe('popup', () => {
         expect(window.document.activeElement).toBe(dummyFocusedEl);
     });
 
-    test('Adding popup with no focusable content (Popup#setHTML) does not change the active element', () => {
+    test('Adding popup with no focusable content (Popup.setHTML) does not change the active element', () => {
         const dummyFocusedEl = window.document.createElement('button');
         window.document.body.appendChild(dummyFocusedEl);
         dummyFocusedEl.focus();
@@ -774,7 +805,7 @@ describe('popup', () => {
 
     test('Popup is positioned on rounded whole-number pixel coordinates by default when offset is a decimal', () => {
         const map = createMap();
-        jest.spyOn(map, 'project').mockReturnValue(new Point(0, 0));
+        vi.spyOn(map, 'project').mockReturnValue(new Point(0, 0));
 
         const popup = new Popup({offset: [-0.1, 0.9]})
             .setLngLat([0, 0])
@@ -786,7 +817,7 @@ describe('popup', () => {
 
     test('Popup position is not rounded when subpixel positioning is enabled', () => {
         const map = createMap();
-        jest.spyOn(map, 'project').mockReturnValue(new Point(0, 0));
+        vi.spyOn(map, 'project').mockReturnValue(new Point(0, 0));
 
         const popup = new Popup({offset: [-0.1, 0.9], subpixelPositioning: true})
             .setLngLat([0, 0])
@@ -796,9 +827,9 @@ describe('popup', () => {
         expect(popup.getElement().style.transform).toBe('translate(-50%,-100%) translate(-0.1px,0.9px)');
     });
 
-    test('Popup subpixel positioning can be enabled with Popup#setSubpixelPositioning', () => {
+    test('Popup subpixel positioning can be enabled with Popup.setSubpixelPositioning', () => {
         const map = createMap();
-        jest.spyOn(map, 'project').mockReturnValue(new Point(0, 0));
+        vi.spyOn(map, 'project').mockReturnValue(new Point(0, 0));
 
         const popup = new Popup({offset: [0, 0]})
             .setLngLat([0, 0])
@@ -810,9 +841,9 @@ describe('popup', () => {
 
         expect(popup.getElement().style.transform).toBe('translate(-50%,-100%) translate(-0.1px,0.9px)');
     });
-    test('Popup subpixel positioning can be disabled with Popup#setSubpixelPositioning', () => {
+    test('Popup subpixel positioning can be disabled with Popup.setSubpixelPositioning', () => {
         const map = createMap();
-        jest.spyOn(map, 'project').mockReturnValue(new Point(0, 0));
+        vi.spyOn(map, 'project').mockReturnValue(new Point(0, 0));
 
         const popup = new Popup({offset: [0, 0], subpixelPositioning: true})
             .setLngLat([0, 0])
@@ -823,5 +854,37 @@ describe('popup', () => {
         popup.setOffset([-0.1, 0.9]);
 
         expect(popup.getElement().style.transform).toBe('translate(-50%,-100%) translate(0px,1px)');
+    });
+    test('Popup changes opacity when location behind globe', async () => {
+        const map = createMap();
+
+        const popup = new Popup({locationOccludedOpacity: 0.2})
+            .setLngLat([0, 0])
+            .setText('Test')
+            .addTo(map);
+
+        await map.once('load');
+        map.setProjection({
+            type: 'globe'
+        });
+        map.setCenter([180, 0]);
+        expect(popup.getElement().style.opacity).toBe('0.2');
+    });
+    test('Popup resets opacity when no longer behind globe', async () => {
+        const map = createMap();
+
+        const popup = new Popup({locationOccludedOpacity: 0.3})
+            .setLngLat([0, 0])
+            .setText('Test')
+            .addTo(map);
+
+        await map.once('load');
+        map.setProjection({
+            type: 'globe'
+        });
+        map.setCenter([180, 0]);
+        expect(popup.getElement().style.opacity).toBe('0.3');
+        map.setCenter([0, 0]);
+        expect(popup.getElement().style.opacity).toBe('');
     });
 });

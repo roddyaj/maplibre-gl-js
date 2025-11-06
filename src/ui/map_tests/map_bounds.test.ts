@@ -1,6 +1,7 @@
+import {describe, beforeEach, test, expect} from 'vitest';
 import {createMap, beforeMapTest} from '../../util/test/util';
 import {fixedLngLat, fixedNum} from '../../../test/unit/lib/fixed';
-import {LngLatBoundsLike} from '../../geo/lng_lat_bounds';
+import {type LngLatBoundsLike} from '../../geo/lng_lat_bounds';
 
 beforeEach(() => {
     beforeMapTest();
@@ -35,12 +36,12 @@ test('initial bounds options in constructor options', () => {
     expect(unpadded.getZoom() > padded.getZoom()).toBeTruthy();
 });
 
-describe('#getBounds', () => {
+describe('getBounds', () => {
 
     test('getBounds', () => {
         const map = createMap({zoom: 0});
-        expect(parseFloat(map.getBounds().getCenter().lng.toFixed(10))).toBe(-0);
-        expect(parseFloat(map.getBounds().getCenter().lat.toFixed(10))).toBe(0);
+        expect(parseFloat(map.getBounds().getCenter().lng.toFixed(10))).toBeCloseTo(0, 10);
+        expect(parseFloat(map.getBounds().getCenter().lat.toFixed(10))).toBeCloseTo(0, 10);
 
         expect(toFixed(map.getBounds().toArray())).toEqual(toFixed([
             [-70.31249999999976, -57.326521225216965],
@@ -74,7 +75,7 @@ describe('#getBounds', () => {
     }
 });
 
-describe('#setMaxBounds', () => {
+describe('setMaxBounds', () => {
     test('constrains map bounds', () => {
         const map = createMap({zoom: 0});
         map.setMaxBounds([[-130.4297, 50.0642], [-61.52344, 24.20688]]);
@@ -107,7 +108,7 @@ describe('#setMaxBounds', () => {
 
 });
 
-describe('#getMaxBounds', () => {
+describe('getMaxBounds', () => {
     test('returns null when no bounds set', () => {
         const map = createMap({zoom: 0});
         expect(map.getMaxBounds()).toBeNull();

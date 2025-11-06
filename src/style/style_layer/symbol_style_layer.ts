@@ -1,16 +1,16 @@
 import {StyleLayer} from '../style_layer';
 
-import {SymbolBucket, SymbolFeature} from '../../data/bucket/symbol_bucket';
+import {SymbolBucket, type SymbolFeature} from '../../data/bucket/symbol_bucket';
 import {resolveTokens} from '../../util/resolve_tokens';
-import properties, {SymbolLayoutPropsPossiblyEvaluated, SymbolPaintPropsPossiblyEvaluated} from './symbol_style_layer_properties.g';
+import properties, {type SymbolLayoutPropsPossiblyEvaluated, type SymbolPaintPropsPossiblyEvaluated} from './symbol_style_layer_properties.g';
 
 import {
-    Transitionable,
-    Transitioning,
-    Layout,
-    PossiblyEvaluated,
+    type Transitionable,
+    type Transitioning,
+    type Layout,
+    type PossiblyEvaluated,
     PossiblyEvaluatedPropertyValue,
-    PropertyValue
+    type PropertyValue
 } from '../properties';
 
 import {
@@ -28,8 +28,10 @@ import type {BucketParameters} from '../../data/bucket';
 import type {SymbolLayoutProps, SymbolPaintProps} from './symbol_style_layer_properties.g';
 import type {EvaluationParameters} from '../evaluation_parameters';
 import type {Expression, Feature, SourceExpression, LayerSpecification} from '@maplibre/maplibre-gl-style-spec';
-import type {CanonicalTileID} from '../../source/tile_id';
+import type {CanonicalTileID} from '../../tile/tile_id';
 import {FormatSectionOverride} from '../format_section_override';
+
+export const isSymbolStyleLayer = (layer: StyleLayer): layer is SymbolStyleLayer => layer.type === 'symbol';
 
 export class SymbolStyleLayer extends StyleLayer {
     _unevaluatedLayout: Layout<SymbolLayoutProps>;
@@ -39,8 +41,8 @@ export class SymbolStyleLayer extends StyleLayer {
     _transitioningPaint: Transitioning<SymbolPaintProps>;
     paint: PossiblyEvaluated<SymbolPaintProps, SymbolPaintPropsPossiblyEvaluated>;
 
-    constructor(layer: LayerSpecification) {
-        super(layer, properties);
+    constructor(layer: LayerSpecification, globalState: Record<string, any>) {
+        super(layer, properties, globalState);
     }
 
     recalculate(parameters: EvaluationParameters, availableImages: Array<string>) {
@@ -154,7 +156,7 @@ export class SymbolStyleLayer extends StyleLayer {
 
         if (textField.value.kind === 'constant' && textField.value.value instanceof Formatted) {
             checkSections(textField.value.value.sections);
-        } else if (textField.value.kind === 'source') {
+        } else if (textField.value.kind === 'source' || textField.value.kind === 'composite') {
 
             const checkExpression = (expression: Expression) => {
                 if (hasOverrides) return;

@@ -1,3 +1,4 @@
+import {describe, beforeEach,  afterEach,  test, expect} from 'vitest';
 import {Hash} from './hash';
 import {createMap as globalCreateMap, beforeMapTest} from '../util/test/util';
 import type {Map} from './map';
@@ -13,7 +14,7 @@ describe('hash', () => {
         const container = window.document.createElement('div');
         Object.defineProperty(container, 'clientWidth', {value: 512});
         Object.defineProperty(container, 'clientHeight', {value: 512});
-        return globalCreateMap({container}, undefined);
+        return globalCreateMap({container});
     }
 
     let map: Map;
@@ -30,7 +31,7 @@ describe('hash', () => {
         window.location.hash = '';
     });
 
-    test('#addTo', () => {
+    test('addTo', () => {
         const hash = createHash();
 
         expect(hash._map).toBeFalsy();
@@ -40,7 +41,7 @@ describe('hash', () => {
         expect(hash._map).toBeTruthy();
     });
 
-    test('#remove', () => {
+    test('remove', () => {
         const hash = createHash()
             .addTo(map);
 
@@ -51,7 +52,7 @@ describe('hash', () => {
         expect(hash._map).toBeFalsy();
     });
 
-    test('#_onHashChange', () => {
+    test('_onHashChange', () => {
         const hash = createHash()
             .addTo(map);
 
@@ -110,13 +111,9 @@ describe('hash', () => {
         window.location.hash = '#4/wrongly/formed/hash';
 
         expect(hash._onHashChange()).toBeFalsy();
-
-        window.location.hash = '#map=10/3.00/-1.00&foo=bar';
-
-        expect(hash._onHashChange()).toBeFalsy();
     });
 
-    test('#_onHashChange empty', () => {
+    test('_onHashChange empty', () => {
         const hash = createHash()
             .addTo(map);
 
@@ -141,7 +138,7 @@ describe('hash', () => {
         expect(map.getPitch()).toBe(0);
     });
 
-    test('#_onHashChange named', () => {
+    test('_onHashChange named', () => {
         const hash = createHash('map')
             .addTo(map);
 
@@ -168,7 +165,7 @@ describe('hash', () => {
         expect(hash._onHashChange()).toBeFalsy();
     });
 
-    test('#_getCurrentHash', () => {
+    test('_getCurrentHash', () => {
         const hash = createHash()
             .addTo(map);
 
@@ -181,7 +178,7 @@ describe('hash', () => {
         expect(currentHash[2]).toBe('-1.00');
     });
 
-    test('#_getCurrentHash named', () => {
+    test('_getCurrentHash named', () => {
         const hash = createHash('map')
             .addTo(map);
 
@@ -202,7 +199,7 @@ describe('hash', () => {
         expect(currentHash[2]).toBe('-1.00');
     });
 
-    test('#_updateHash', () => {
+    test('_updateHash', () => {
         function getHash() {
             return window.location.hash.split('/');
         }
@@ -247,11 +244,12 @@ describe('hash', () => {
         expect(newHash[4]).toBe('60');
     });
 
-    test('#_updateHash named', () => {
+    test('_updateHash named', () => {
         createHash('map')
             .addTo(map);
 
         expect(window.location.hash).toBeFalsy();
+        window.location.hash = '';
 
         map.setZoom(3);
         map.setCenter([1.0, 2.0]);
@@ -281,7 +279,7 @@ describe('hash', () => {
         expect(window.location.hash).toBe('#baz&map=7/1/2/135/60&foo=bar');
     });
 
-    test('#_removeHash', () => {
+    test('_removeHash', () => {
         const hash = createHash()
             .addTo(map);
 
@@ -301,7 +299,7 @@ describe('hash', () => {
         expect(window.location.hash).toBe('#foo=bar');
     });
 
-    test('#_removeHash named', () => {
+    test('_removeHash named', () => {
         const hash = createHash('map')
             .addTo(map);
 
@@ -325,6 +323,69 @@ describe('hash', () => {
         hash._removeHash();
 
         expect(window.location.hash).toBe('#baz&foo=bar');
+    });
+
+    describe('_isValidHash', () => {
+        let hash: Hash;
+
+        beforeEach(() => {
+            hash = createHash()
+                .addTo(map);
+        });
+
+        test('validate correct hash', () => {
+            window.location.hash = '#10/3.00/-1.00';
+
+            expect(hash._isValidHash(hash._getCurrentHash())).toBeTruthy();
+
+            window.location.hash = '#5/1.00/0.50/30/60';
+
+            expect(hash._isValidHash(hash._getCurrentHash())).toBeTruthy();
+
+            window.location.hash = '#5/1.00/0.50/-30/60';
+
+            expect(hash._isValidHash(hash._getCurrentHash())).toBeTruthy();
+        });
+
+        test('invalidate hash with string values', () => {
+            window.location.hash = '#4/wrongly/formed/hash';
+
+            expect(hash._isValidHash(hash._getCurrentHash())).toBeFalsy();
+        });
+
+        test('invalidate hash that is named, but should not be', () => {
+            window.location.hash = '#map=10/3.00/-1.00&foo=bar';
+
+            expect(hash._isValidHash(hash._getCurrentHash())).toBeFalsy();
+        });
+
+        test('invalidate hash, zoom greater than maxZoom', () => {
+            window.location.hash = '#24/3.00/-1.00';
+
+            expect(hash._isValidHash(hash._getCurrentHash())).toBeFalsy();
+        });
+
+        test('invalidate hash, latitude out of range', () => {
+            window.location.hash = '#10/100.00/-1.00';
+
+            expect(hash._isValidHash(hash._getCurrentHash())).toBeFalsy();
+        });
+
+        test('invalidate hash, bearing out of range', () => {
+            window.location.hash = '#10/3.00/-1.00/450';
+
+            expect(hash._isValidHash(hash._getCurrentHash())).toBeFalsy();
+
+            window.location.hash = '#10/3.00/-1.00/-450';
+
+            expect(hash._isValidHash(hash._getCurrentHash())).toBeFalsy();
+        });
+
+        test('invalidate hash, pitch greater than maxPitch', () => {
+            window.location.hash = '#10/3.00/-1.00/30/90';
+
+            expect(hash._isValidHash(hash._getCurrentHash())).toBeFalsy();
+        });
     });
 
     test('initialize http://localhost/#', () => {
@@ -392,7 +453,7 @@ describe('hash', () => {
         expect(window.location.href).toBe('http://localhost/#4/1/2');
     });
 
-    test('map#remove', () => {
+    test('map.remove', () => {
         const container = window.document.createElement('div');
         Object.defineProperty(container, 'clientWidth', {value: 512});
         Object.defineProperty(container, 'clientHeight', {value: 512});

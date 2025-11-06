@@ -37,8 +37,8 @@ export class MessageBus implements WorkerGlobalScopeInterface, ActorTarget {
                 for (const listener of this.postListeners) {
                     listener({data, target: this.target} as any);
                 }
-            } catch (e) {
-                console.error(e);
+            } catch {
+                // this is used only in tests, ignoring.
             }
         }, 0);
     }
@@ -51,7 +51,7 @@ export class MessageBus implements WorkerGlobalScopeInterface, ActorTarget {
     importScripts() { }
 }
 
-export function setGlobalWorker(MockWorker: { new(...args: any): any}) {
+function setGlobalWorker(MockWorker: { new(...args: any): any}) {
     (global as any).Worker = function Worker(_: string) {
         const parentListeners = [];
         const workerListeners = [];

@@ -16,7 +16,7 @@ Vector tiles are fetched and parsed on WebWorker threads.  "Parsing" a vector ti
 
 `WorkerTile#parse()` takes a (deserialized) vector tile, fetches additional resources if they're needed (fonts, images), and then creates a `Bucket` for each 'family' of style layers that share the same underlying features and 'layout' properties (see `group_by_layout.js`).
 
-[Bucket](./src/data/bucket.js) is the single point of knowledge about turning vector tiles into WebGL buffers. Each bucket holds the vertex and element array data needed to render its group of style layers (see [ArrayGroup](./src/data/bucket.js)).  The particular bucket types each know how to populate that data for their layer types.
+[Bucket](./src/data/bucket.ts) is the single point of knowledge about turning vector tiles into WebGL buffers. Each bucket holds the vertex and element array data needed to render its group of style layers (see [ArrayGroup](./src/data/bucket.ts)).  The particular bucket types each know how to populate that data for their layer types.
 
 ### Rendering with WebGL
 
@@ -58,7 +58,7 @@ Compiling and caching GL shader programs is managed by the `Painter` and `Progra
  - Expanding a `#pragma mapbox` statement in our shader source into either a _uniform_ or _attribute_, _varying_, and _local_ variable declaration, depending on whether or not the relevant style property is data-driven.
  - Creating and populating a _paint_ vertex array for data-driven properties, corresponding to the `attributes` declared in the shader. (This happens at layout time, on the worker side.)
 
-## SourceCache
+## TileManager
 
 ## Transform
 

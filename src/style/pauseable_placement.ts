@@ -1,14 +1,11 @@
-import {browser} from '../util/browser';
-
+import {now} from '../util/time_control';
 import {Placement} from '../symbol/placement';
-
-import type {Transform} from '../geo/transform';
+import type {ITransform} from '../geo/transform_interface';
 import type {StyleLayer} from './style_layer';
 import type {SymbolStyleLayer} from './style_layer/symbol_style_layer';
-import type {Tile} from '../source/tile';
+import type {Tile} from '../tile/tile';
 import type {BucketPart} from '../symbol/placement';
-import {Terrain} from '../render/terrain';
-import {createProjection} from '../geo/projection/projection';
+import type {Terrain} from '../render/terrain';
 
 class LayerPlacement {
     _sortAcrossTiles: boolean;
@@ -70,7 +67,7 @@ export class PauseablePlacement {
     _inProgressLayer: LayerPlacement;
 
     constructor(
-        transform: Transform,
+        transform: ITransform,
         terrain: Terrain,
         order: Array<string>,
         forceFullPlacement: boolean,
@@ -79,7 +76,7 @@ export class PauseablePlacement {
         crossSourceCollisions: boolean,
         prevPlacement?: Placement
     ) {
-        this.placement = new Placement(transform, createProjection(), terrain, fadeDuration, crossSourceCollisions, prevPlacement);
+        this.placement = new Placement(transform, terrain, fadeDuration, crossSourceCollisions, prevPlacement);
         this._currentPlacementIndex = order.length - 1;
         this._forceFullPlacement = forceFullPlacement;
         this._showCollisionBoxes = showCollisionBoxes;
@@ -95,10 +92,10 @@ export class PauseablePlacement {
         layers: {[_: string]: StyleLayer},
         layerTiles: {[_: string]: Array<Tile>}
     ) {
-        const startTime = browser.now();
+        const startTime = now();
 
         const shouldPausePlacement = () => {
-            return this._forceFullPlacement ? false : (browser.now() - startTime) > 2;
+            return this._forceFullPlacement ? false : (now() - startTime) > 2;
         };
 
         while (this._currentPlacementIndex >= 0) {

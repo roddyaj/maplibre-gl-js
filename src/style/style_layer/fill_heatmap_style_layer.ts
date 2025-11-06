@@ -11,6 +11,8 @@ import type {Framebuffer} from '../../gl/framebuffer';
 import type {FillHeatmapPaintProps} from './fill_heatmap_style_layer_properties.g';
 import type {LayerSpecification} from '@maplibre/maplibre-gl-style-spec';
 
+export const isFillHeatmapStyleLayer = (layer: StyleLayer): layer is FillHeatmapStyleLayer => layer.type === 'fill-heatmap';
+
 /**
  * A style layer that defines a fill heatmap
  */
@@ -29,8 +31,8 @@ export class FillHeatmapStyleLayer extends StyleLayer {
         return new FillHeatmapBucket(options);
     }
 
-    constructor(layer: LayerSpecification) {
-        super(layer, properties);
+    constructor(layer: LayerSpecification, globalState: Record<string, any>) {
+        super(layer, properties, globalState);
 
         // make sure color ramp texture is generated for default heatmap color too
         this._updateColorRamp();

@@ -1,12 +1,13 @@
+import {beforeEach, test, expect, vi} from 'vitest';
 import {createMap, beforeMapTest} from '../../util/test/util';
-import {IControl} from '../control/control';
+import {type IControl} from '../control/control';
 
 beforeEach(() => {
     beforeMapTest();
     global.fetch = null;
 });
 
-test('#addControl', () => {
+test('addControl', () => {
     const map = createMap();
     const control = {
         onAdd(_) {
@@ -18,10 +19,10 @@ test('#addControl', () => {
     expect(map._controls[0]).toBe(control);
 });
 
-test('#removeControl errors on invalid arguments', () => {
+test('removeControl errors on invalid arguments', () => {
     const map = createMap();
     const control = {} as any as IControl;
-    const stub = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const stub = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     map.addControl(control);
     map.removeControl(control);
@@ -29,7 +30,7 @@ test('#removeControl errors on invalid arguments', () => {
 
 });
 
-test('#removeControl', () => {
+test('removeControl', () => {
     const map = createMap();
     const control = {
         onAdd() {
@@ -45,7 +46,7 @@ test('#removeControl', () => {
 
 });
 
-test('#hasControl', () => {
+test('hasControl', () => {
     const map = createMap();
     function Ctrl() {}
     Ctrl.prototype = {

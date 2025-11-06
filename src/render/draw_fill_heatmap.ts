@@ -11,20 +11,21 @@ import {
     fillHeatmapTextureUniformValues
 } from './program/fill_heatmap_program';
 
-import type {Painter} from './painter';
-import type {SourceCache} from '../source/source_cache';
+import type {Painter, RenderOptions} from './painter';
+import type {TileManager} from '../tile/tile_manager';
 import type {FillHeatmapStyleLayer} from '../style/style_layer/fill_heatmap_style_layer';
 import type {FillHeatmapBucket} from '../data/bucket/fill_heatmap_bucket';
-import type {OverscaledTileID} from '../source/tile_id';
+import type {OverscaledTileID} from '../tile/tile_id';
 
 const scaleFactor = 1.5;
 
-export function drawFillHeatmap(painter: Painter, sourceCache: SourceCache, layer: FillHeatmapStyleLayer, coords: Array<OverscaledTileID>) {
+export function drawFillHeatmap(painter: Painter, tileManager: TileManager, layer: FillHeatmapStyleLayer, coords: Array<OverscaledTileID>, renderOptions: RenderOptions) {
     if (layer.paint.get('fill-heatmap-opacity') === 0) {
         return;
     }
 
     const context = painter.context;
+    const {isRenderingToTexture} = renderOptions;
     if (painter.renderPass === 'offscreen') {
         // Render the tiles to an offscreen buffer using the red channel
 
@@ -32,9 +33,9 @@ export function drawFillHeatmap(painter: Painter, sourceCache: SourceCache, laye
 
         context.clear({color: Color.transparent});
         painter.clearStencil();
-        painter._renderTileClippingMasks(layer, coords);
+        painter._renderTileClippingMasks(layer, coords, isRenderingToTexture);
 
-        drawFillTiles(painter, sourceCache, layer, coords);
+        drawFillTiles(painter, tileManager, layer, coords);
 
         context.viewport.set([0, 0, painter.width, painter.height]);
 
@@ -59,7 +60,7 @@ export function drawFillHeatmap(painter: Painter, sourceCache: SourceCache, laye
 
 function drawFillTiles(
     painter: Painter,
-    sourceCache: SourceCache,
+    tileManager: TileManager,
     layer: FillHeatmapStyleLayer,
     coords: Array<OverscaledTileID>) {
     const gl = painter.context.gl;
@@ -69,9 +70,9 @@ function drawFillTiles(
     const colorMode = new ColorMode([gl.ONE, gl.ONE], Color.transparent, [true, true, true, true]);
 
     for (const coord of coords) {
-        // if (sourceCache.hasRenderableParent(coord)) continue; // do we want this?
+        // if (tileManager.hasRenderableParent(coord)) continue; // do we want this?
 
-        const tile = sourceCache.getTile(coord);
+        const tile = tileManager.getTile(coord);
         const bucket: FillHeatmapBucket = (tile.getBucket(layer) as any);
         if (!bucket) continue;
 
@@ -79,12 +80,11 @@ function drawFillTiles(
         const program = painter.useProgram('fillHeatmap', programConfiguration);
         const stencilMode = painter.stencilModeForClipping(coord);
         const terrainData = painter.style.map.terrain && painter.style.map.terrain.getTerrainData(coord);
-        const terrainCoord = terrainData ? coord : null;
-        const posMatrix = terrainCoord ? terrainCoord.posMatrix : coord.posMatrix;
-        const uniformValues = fillHeatmapUniformValues(posMatrix, tile, zoom);
+        const projectionData = painter.transform.getProjectionData({overscaledTileID: coord, applyGlobeMatrix: true, applyTerrainMatrix: true});
+        const uniformValues = fillHeatmapUniformValues([0, 0]);
 
         program.draw(painter.context, gl.TRIANGLES, DepthMode.disabled, stencilMode, colorMode, CullFaceMode.disabled,
-            uniformValues, terrainData, layer.id, bucket.layoutVertexBuffer, bucket.indexBuffer, bucket.segments,
+            uniformValues, terrainData, projectionData, layer.id, bucket.layoutVertexBuffer, bucket.indexBuffer, bucket.segments,
             layer.paint, zoom, programConfiguration);
     }
 }
@@ -157,7 +157,7 @@ function renderTexture(painter: Painter, layer: FillHeatmapStyleLayer, fboId: nu
     const limitCount = layer.paint.get('fill-heatmap-limit-count').constantOr(100);
     painter.useProgram('fillHeatmapTexture').draw(context, gl.TRIANGLES,
         DepthMode.disabled, StencilMode.disabled, painter.colorModeForRenderPass(), CullFaceMode.disabled,
-        fillHeatmapTextureUniformValues(painter, layer, 0, 1, scaleFactor, dir, limitCount), null,
+        fillHeatmapTextureUniformValues(painter, layer, 0, 1, scaleFactor, dir, limitCount), null, null,
         layer.id, painter.viewportBuffer, painter.quadTriangleIndexBuffer,
         painter.viewportSegments, layer.paint, painter.transform.zoom);
 }

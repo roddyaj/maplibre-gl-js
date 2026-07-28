@@ -1,4 +1,4 @@
-import {beforeEach, test, expect} from 'vitest';
+import {beforeEach, test, expect, vi} from 'vitest';
 import {createMap, beforeMapTest, createTerrain} from '../../util/test/util';
 import simulate from '../../../test/unit/lib/simulate_interaction';
 
@@ -91,4 +91,78 @@ test('recalculate zoom is done on the camera update transform', async () => {
     simulate.dragWithMove(canvas, {x: 100, y: 100}, {x: 100, y: 150});
     map._renderTaskQueue.run();
     expect(map.getZoom()).toBeCloseTo(0.20007702699730118, 10);
+});
+
+test('transformCameraUpdate is called after changing min or max zoom', async () => {
+    const map = createMap({
+        interactive: true,
+        clickTolerance: 4,
+    });
+    map.setMinZoom(5);
+    map.setMaxZoom(18);
+    map.setZoom(18);
+    await map.once('style.load');
+    expect(map.getZoom()).toEqual(18);
+    expect(map.getMinZoom()).toEqual(5);
+    expect(map.getMaxZoom()).toEqual(18);
+    const transformCameraUpdate = vi.fn(t => t);
+    map.transformCameraUpdate = transformCameraUpdate;
+
+    map.setMaxZoom(16);
+    expect(map.getZoom()).toEqual(16);
+    expect(map.getMinZoom()).toEqual(5);
+    expect(map.getMaxZoom()).toEqual(16);
+    expect(transformCameraUpdate.mock.calls[0][0]).toMatchObject({
+        zoom: 16,
+        minZoom: 5,
+        maxZoom: 16,
+    });
+
+    map.setZoom(5);
+    expect(transformCameraUpdate.mock.calls[1][0]).toMatchObject({
+        zoom: 5,
+        minZoom: 5,
+        maxZoom: 16,
+    });
+
+    map.setMinZoom(6);
+    map.transformCameraUpdate = transformCameraUpdate;
+    expect(map.getZoom()).toEqual(6);
+    expect(map.getMinZoom()).toEqual(6);
+    expect(map.getMaxZoom()).toEqual(16);
+    expect(transformCameraUpdate.mock.calls[2][0]).toMatchObject({
+        zoom: 6,
+        minZoom: 6,
+        maxZoom: 16,
+    });
+});
+
+test('fire move and zoom events when zoom is changed due to minZoom change', () => {
+    const map = createMap({minZoom: 0, zoom: 10});
+    const handleEvent = vi.fn();
+    map.on('movestart', handleEvent);
+    map.on('move', handleEvent);
+    map.on('moveend', handleEvent);
+    map.on('zoomstart', handleEvent);
+    map.on('zoom', handleEvent);
+    map.on('zoomend', handleEvent);
+    map.setMinZoom(11);
+    expect(map.getZoom()).toEqual(11);
+    expect(map.getMinZoom()).toEqual(11);
+    expect(handleEvent).toHaveBeenCalledTimes(6);
+});
+
+test('fire move and zoom events when zoom is changed due to maxZoom change', () => {
+    const map = createMap({maxZoom: 20, zoom: 20});
+    const handleEvent = vi.fn();
+    map.on('movestart', handleEvent);
+    map.on('move', handleEvent);
+    map.on('moveend', handleEvent);
+    map.on('zoomstart', handleEvent);
+    map.on('zoom', handleEvent);
+    map.on('zoomend', handleEvent);
+    map.setMaxZoom(10);
+    expect(map.getZoom()).toEqual(10);
+    expect(map.getMaxZoom()).toEqual(10);
+    expect(handleEvent).toHaveBeenCalledTimes(6);
 });

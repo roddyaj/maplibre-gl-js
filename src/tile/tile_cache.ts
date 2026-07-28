@@ -19,7 +19,7 @@ export class TileCache {
             timeout: ReturnType<typeof setTimeout>;
         }>;
     };
-    order: Array<string>;
+    order: string[];
     onRemove: (element: Tile) => void;
     /**
      * @param max - number of permitted values
@@ -179,7 +179,7 @@ export class TileCache {
      * @param max - the max size of the cache
      * @returns this cache
      */
-    setMaxSize(max: number): TileCache {
+    setMaxSize(max: number): this {
         this.max = max;
 
         while (this.order.length > this.max) {
@@ -208,5 +208,40 @@ export class TileCache {
         for (const r of removed) {
             this.remove(r.value.tileID, r);
         }
+    }
+}
+
+export class BoundedLRUCache<K, V> {
+    private maxEntries: number;
+    private map: Map<K, V>;
+
+    constructor(maxEntries: number) {
+        this.maxEntries = maxEntries;
+        this.map = new Map();
+    }
+
+    get(key: K): V | undefined {
+        const value = this.map.get(key);
+        if (value !== undefined) {
+            // Move key to end (most recently used)
+            this.map.delete(key);
+            this.map.set(key, value);
+        }
+        return value;
+    }
+
+    set(key: K, value: V): void {
+        if (this.map.has(key)) {
+            this.map.delete(key);
+        } else if (this.map.size >= this.maxEntries) {
+            // Delete oldest
+            const oldestKey = this.map.keys().next().value;
+            this.map.delete(oldestKey);
+        }
+        this.map.set(key, value);
+    }
+
+    clear(): void {
+        this.map.clear();
     }
 }

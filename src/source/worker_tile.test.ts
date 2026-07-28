@@ -1,10 +1,9 @@
 import {describe, test, expect, vi} from 'vitest';
 import {WorkerTile} from '../source/worker_tile';
-import {type Feature, GeoJSONWrapper} from '@maplibre/vt-pbf';
+import {type Feature, GeoJSONWrapper, type VectorTileLike} from '@maplibre/vt-pbf';
 import {OverscaledTileID} from '../tile/tile_id';
 import {StyleLayerIndex} from '../style/style_layer_index';
-import {type WorkerTileParameters} from './worker_source';
-import {type VectorTile} from '@mapbox/vector-tile';
+import {type WorkerTileParameters, type WorkerTileWithData} from './worker_source';
 import {SubdivisionGranularitySetting} from '../render/subdivision_granularity_settings';
 import {type EvaluationParameters} from '../style/evaluation_parameters';
 import {type PossiblyEvaluated} from '../style/properties';
@@ -53,7 +52,7 @@ describe('worker tile', () => {
         }]);
 
         const tile = createWorkerTile();
-        const result = await tile.parse(createWrapper(), layerIndex, [], {} as any, SubdivisionGranularitySetting.noSubdivision);
+        const result = await tile.parse(createWrapper(), layerIndex, [], {} as any, SubdivisionGranularitySetting.noSubdivision) as WorkerTileWithData;
         expect(result.buckets[0]).toBeTruthy();
         console.warn = originalWarn;
     });
@@ -69,7 +68,7 @@ describe('worker tile', () => {
         }]);
 
         const tile = createWorkerTile();
-        const result = await tile.parse(createLineWrapper(), layerIndex, [], {} as any, SubdivisionGranularitySetting.noSubdivision);
+        const result = await tile.parse(createLineWrapper(), layerIndex, [], {} as any, SubdivisionGranularitySetting.noSubdivision) as WorkerTileWithData;
         expect(result.buckets[0]).toBeTruthy();
         expect(result.buckets[0].layers[0].layout._values['line-join'].value.value).toBe('bevel');
     });
@@ -87,7 +86,7 @@ describe('worker tile', () => {
         const tile = createWorkerTile({
             globalState: {test: 'bevel'}
         });
-        const result = await tile.parse(createLineWrapper(), layerIndex, [], {} as any, SubdivisionGranularitySetting.noSubdivision);
+        const result = await tile.parse(createLineWrapper(), layerIndex, [], {} as any, SubdivisionGranularitySetting.noSubdivision) as WorkerTileWithData;
         expect(result.buckets[0]).toBeTruthy();
         expect(result.buckets[0].layers[0].layout._values['line-join'].value.value).toBe('bevel');
     });
@@ -105,7 +104,7 @@ describe('worker tile', () => {
         const tile = createWorkerTile({
             globalState: {test: 1}
         });
-        const result = await tile.parse(createLineWrapper(), layerIndex, [], {} as any, SubdivisionGranularitySetting.noSubdivision);
+        const result = await tile.parse(createLineWrapper(), layerIndex, [], {} as any, SubdivisionGranularitySetting.noSubdivision) as WorkerTileWithData;
         expect(result.buckets[0]).toBeTruthy();
         expect(result.buckets[0].layers[0].paint._values['fill-extrusion-height'].value.value).toBe(1);
     });
@@ -119,7 +118,7 @@ describe('worker tile', () => {
         }]);
 
         const tile = createWorkerTile();
-        const result = await tile.parse(createWrapper(), layerIndex, [], {} as any, SubdivisionGranularitySetting.noSubdivision);
+        const result = await tile.parse(createWrapper(), layerIndex, [], {} as any, SubdivisionGranularitySetting.noSubdivision) as WorkerTileWithData;
         expect(result.buckets).toHaveLength(0);
     });
 
@@ -132,7 +131,7 @@ describe('worker tile', () => {
         }]);
 
         const tile = createWorkerTile();
-        const result = await tile.parse({layers: {}}, layerIndex, [], {} as any, SubdivisionGranularitySetting.noSubdivision);
+        const result = await tile.parse({layers: {}}, layerIndex, [], {} as any, SubdivisionGranularitySetting.noSubdivision) as WorkerTileWithData;
         expect(result.buckets).toHaveLength(0);
     });
 
@@ -150,7 +149,7 @@ describe('worker tile', () => {
                     version: 1
                 }
             }
-        } as any as VectorTile;
+        } as any as VectorTileLike;
 
         const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
@@ -209,7 +208,7 @@ describe('worker tile', () => {
                     })
                 }
             }
-        } as any as VectorTile;
+        } as any as VectorTileLike;
 
         const sendAsync = vi.fn().mockImplementation((message: {type: string; data: any}) => {
             if (message.type === MessageType.getImages) {
@@ -278,7 +277,7 @@ describe('worker tile', () => {
                     })
                 }
             }
-        } as any as VectorTile;
+        } as any as VectorTileLike;
 
         let cancelCount = 0;
         const sendAsync = vi.fn().mockImplementation((message: {type: string; data: unknown}, abortController: AbortController) => {

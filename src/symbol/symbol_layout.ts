@@ -228,7 +228,7 @@ export function performSymbolLayout(args: {
 
         let shapedIcon;
         let isSDFIcon = false;
-        if (feature.icon && feature.icon.name) {
+        if (feature.icon?.name) {
             const image = args.imageMap[feature.icon.name];
             if (image) {
                 shapedIcon = shapeIcon(
@@ -251,7 +251,7 @@ export function performSymbolLayout(args: {
         }
 
         const shapedText = getDefaultHorizontalShaping(shapedTextOrientations.horizontal) || shapedTextOrientations.vertical;
-        args.bucket.iconsInText = shapedText ? shapedText.iconsInText : false;
+        args.bucket.iconsInText ||= shapedText ? shapedText.iconsInText : false;
         if (shapedText || shapedIcon) {
             addFeature(args.bucket, feature, shapedTextOrientations, shapedIcon, args.imageMap, sizes, layoutTextSize, layoutIconSize, textOffset, isSDFIcon, args.canonical, args.subdivisionGranularity);
         }
@@ -507,7 +507,7 @@ function getDefaultHorizontalShaping(
  */
 function addSymbol(bucket: SymbolBucket,
     anchor: Anchor,
-    line: Array<Point>,
+    line: Point[],
     shapedTextOrientations: ShapedTextOrientations,
     shapedIcon: PositionedIcon | undefined,
     imageMap: {[_: string]: StyleImage},
@@ -673,7 +673,7 @@ function addSymbol(bucket: SymbolBucket,
     let collisionCircleDiameter = -1;
 
     const getCollisionCircleHeight = (feature: CollisionFeature, prevHeight: number): number => {
-        if (feature && feature.circleDiameter)
+        if (feature?.circleDiameter)
             return Math.max(feature.circleDiameter, prevHeight);
         return prevHeight;
     };

@@ -95,10 +95,8 @@ export interface ITransformGetters {
     get nearZ(): number;
     get farZ(): number;
     get autoCalculateNearFarZ(): boolean;
-    /**
-     * Get center lngLat and zoom to ensure that longitude and latitude bounds are respected and regions beyond the map bounds are not displayed.
-     */
-    get constrain(): TransformConstrainFunction;
+
+    get constrainOverride(): TransformConstrainFunction;
 }
 
 /**
@@ -108,7 +106,12 @@ export interface ITransformGetters {
 interface ITransformMutators {
     clone(): ITransform;
 
-    apply(that: IReadonlyTransform): void;
+    /**
+     * Applies a transform to the current transform.
+     * @param that - The transform to apply to the current transform.
+     * @param constrain - Whether to constrain the transform's center and zoom and recompute internal matrices once applied.
+     */
+    apply(that: IReadonlyTransform, constrain: boolean): void;
 
     /**
      * Sets the transform's minimal allowed zoom level.
@@ -210,11 +213,11 @@ interface ITransformMutators {
      */
     setMaxBounds(bounds?: LngLatBounds | null): void;
 
-    /** Sets or clears the callback overriding the transform's default constrain,
+    /** Sets or clears the custom callback overriding the transform's default constrain,
      * whose responsibility is to respect the longitude and latitude bounds by constraining the viewport's lnglat and zoom.
      * @param constrain - A {@link TransformConstrainFunction} callback defining how the viewport should respect the bounds.
      */
-    setConstrain(constrain?: TransformConstrainFunction | null): void;
+    setConstrainOverride(constrain?: TransformConstrainFunction | null): void;
 
     /**
      * @internal
@@ -223,7 +226,7 @@ interface ITransformMutators {
      * Used in mercator transform to precompute tile matrices (posMatrix).
      * @param coords - Array of tile IDs that will be rendered.
      */
-    populateCache(coords: Array<OverscaledTileID>): void;
+    populateCache(coords: OverscaledTileID[]): void;
 
     /**
      * @internal
@@ -290,7 +293,7 @@ export interface IReadonlyTransform extends ITransformGetters {
      * Return any "wrapped" copies of a given tile coordinate that are visible
      * in the current view.
      */
-    getVisibleUnwrappedCoordinates(tileID: CanonicalTileID): Array<UnwrappedTileID>;
+    getVisibleUnwrappedCoordinates(tileID: CanonicalTileID): UnwrappedTileID[];
 
     /**
      * @internal
@@ -367,6 +370,11 @@ export interface IReadonlyTransform extends ITransformGetters {
      */
     defaultConstrain: TransformConstrainFunction;
 
+    /**
+     * Constrain the center lngLat and zoom to ensure that longitude and latitude bounds are respected and regions beyond the map bounds are not displayed.
+     */
+    applyConstrain: TransformConstrainFunction;
+
     maxPitchScaleFactor(): number;
 
     /**
@@ -413,7 +421,7 @@ export interface IReadonlyTransform extends ITransformGetters {
      * screen where the *base* of a visible extrusion could be.
      *
      */
-    getCameraQueryGeometry(queryGeometry: Array<Point>): Array<Point>;
+    getCameraQueryGeometry(queryGeometry: Point[]): Point[];
 
     /**
      * Return the distance to the camera in clip space from a LngLat.

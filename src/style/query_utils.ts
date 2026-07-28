@@ -35,7 +35,7 @@ export function translateDistance(translate: [number, number]) {
  * @param pixelsToTileUnits - The scale factor from pixels to tile units
  * @returns the translated geometry in tile coordinates
  */
-export function translate(queryGeometry: Array<Point>,
+export function translate(queryGeometry: Point[],
     translate: [number, number],
     translateAnchor: 'viewport' | 'map',
     bearing: number,
@@ -50,32 +50,47 @@ export function translate(queryGeometry: Array<Point>,
     }
 
     const translated: Point[] = [];
-    for (let i = 0; i < queryGeometry.length; i++) {
-        const point = queryGeometry[i];
+    for (const point of queryGeometry) {
         translated.push(point.sub(pt));
     }
     return translated;
 }
 
-export function offsetLine(rings: Array<Array<Point>>, offset: number) {
-    const newRings: Array<Array<Point>> = [];
-    for (let ringIndex = 0; ringIndex < rings.length; ringIndex++) {
-        const ring = rings[ringIndex];
-        const newRing: Array<Point> = [];
+/**
+ * Filter out consecutive duplicate points from a line
+ */
+function _stripDuplicates(ring: Point[]): Point[] {
+    const filteredRing: Point[] = [];
+    for (let index = 0; index < ring.length; index++) {
+        const point = ring[index];
+        const prevPoint = filteredRing.at(-1);
+        if (index === 0 || (prevPoint && !(point.equals(prevPoint)))) {
+            filteredRing.push(point);
+        }
+    }
+    return filteredRing;
+}
+
+export function offsetLine(rings: Point[][], offset: number) {
+    const newRings: Point[][] = [];
+    for (const rawRing of rings) {
+        const ring = _stripDuplicates(rawRing);
+        const newRing: Point[] = [];
         for (let index = 0; index < ring.length; index++) {
-            const a = ring[index - 1];
-            const b = ring[index];
-            const c = ring[index + 1];
-            const aToB = index === 0 ? new Point(0, 0) : b.sub(a)._unit()._perp();
-            const bToC = index === ring.length - 1 ? new Point(0, 0) : c.sub(b)._unit()._perp();
-            const extrude = aToB._add(bToC)._unit();
-
-            const cosHalfAngle = extrude.x * bToC.x + extrude.y * bToC.y;
+            const point = ring[index];
+            const prevPoint = ring[index - 1];
+            const nextPoint = ring[index + 1];
+            // perpendicular unit vectors (outward unit normal vector):
+            // these indicate which direction the segments should be offset in
+            const unitNormalAB: Point = index === 0 ? new Point(0, 0) : point.sub(prevPoint)._unit()._perp();
+            const unitNormalBC: Point = index === ring.length - 1 ? new Point(0, 0) : nextPoint.sub(point)._unit()._perp();
+            // unit bisector direction
+            const bisectorDir = unitNormalAB._add(unitNormalBC)._unit();
+            const cosHalfAngle = bisectorDir.x * unitNormalBC.x + bisectorDir.y * unitNormalBC.y;
             if (cosHalfAngle !== 0) {
-                extrude._mult(1 / cosHalfAngle);
+                bisectorDir._mult(1 / cosHalfAngle);
             }
-
-            newRing.push(extrude._mult(offset)._add(b));
+            newRing.push(bisectorDir._mult(offset)._add(point));
         }
         newRings.push(newRing);
     }
@@ -83,7 +98,7 @@ export function offsetLine(rings: Array<Array<Point>>, offset: number) {
 }
 
 type CircleIntersectionTestParams = {
-    queryGeometry: Array<Point>;
+    queryGeometry: Point[];
     size: number;
     transform: IReadonlyTransform;
     unwrappedTileID: UnwrappedTileID;
@@ -140,14 +155,13 @@ function projectPoint(tilePoint: Point, transform: IReadonlyTransform, unwrapped
     // Convert `tilePoint` from tile coordinates to clip coordinates.
     const clipPoint = transform.projectTileCoordinates(tilePoint.x, tilePoint.y, unwrappedTileID, getElevation).point;
     // Convert `clipPoint` from clip coordinates into pixel/screen coordinates.
-    const pixelPoint = new Point(
+    return new Point(
         (clipPoint.x * 0.5 + 0.5) * transform.width,
         (-clipPoint.y * 0.5 + 0.5) * transform.height
     );
-    return pixelPoint;
 }
 
-export function projectQueryGeometry(queryGeometry: Array<Point>, transform: IReadonlyTransform, unwrappedTileID: UnwrappedTileID, getElevation: undefined | ((x: number, y: number) => number)) {
+export function projectQueryGeometry(queryGeometry: Point[], transform: IReadonlyTransform, unwrappedTileID: UnwrappedTileID, getElevation: undefined | ((x: number, y: number) => number)) {
     return queryGeometry.map((p) => {
         return projectPoint(p, transform, unwrappedTileID, getElevation);
     });

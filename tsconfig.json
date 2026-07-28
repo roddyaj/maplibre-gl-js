@@ -33,13 +33,17 @@
       "types": [
         "node"
       ]
-    }
+    },
+    "logError": true,
+    "pretty": true
   },
   "include": [
     "rollup.config.*",
     "src/**/*",
     "test/bench/**/*",
-    "test/integration/**/*"
+    "test/integration/**/*",
+    "test/unit/**/*",
+    "vitest.config.*.ts"
   ],
   "exclude": [
     "node_modules",

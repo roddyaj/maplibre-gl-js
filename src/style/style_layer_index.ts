@@ -1,7 +1,7 @@
 import {createStyleLayer} from './create_style_layer';
 import {featureFilter, groupByLayout} from '@maplibre/maplibre-gl-style-spec';
+import {GEOJSON_TILE_LAYER_NAME} from '../data/feature_index';
 import type {StyleLayer} from './style_layer';
-
 import type {LayerSpecification} from '@maplibre/maplibre-gl-style-spec';
 
 export type LayerConfigs = {[_: string]: LayerSpecification};
@@ -9,7 +9,7 @@ export type LayerConfigs = {[_: string]: LayerSpecification};
 export class StyleLayerIndex {
     familiesBySource: {
         [source: string]: {
-            [sourceLayer: string]: Array<Array<StyleLayer>>;
+            [sourceLayer: string]: StyleLayer[][];
         };
     };
     keyCache: {[source: string]: string};
@@ -17,20 +17,20 @@ export class StyleLayerIndex {
     _layerConfigs: LayerConfigs;
     _layers: {[_: string]: StyleLayer};
 
-    constructor(layerConfigs?: Array<LayerSpecification> | null, globalState?: Record<string, any>) {
+    constructor(layerConfigs?: LayerSpecification[] | null, globalState?: Record<string, any>) {
         this.keyCache = {};
         if (layerConfigs) {
             this.replace(layerConfigs, globalState);
         }
     }
 
-    replace(layerConfigs: Array<LayerSpecification>, globalState?: Record<string, any>) {
+    replace(layerConfigs: LayerSpecification[], globalState?: Record<string, any>) {
         this._layerConfigs = {};
         this._layers = {};
         this.update(layerConfigs, [], globalState);
     }
 
-    update(layerConfigs: Array<LayerSpecification>, removedIds: Array<string>, globalState?: Record<string, any>) {
+    update(layerConfigs: LayerSpecification[], removedIds: string[], globalState?: Record<string, any>) {
         for (const layerConfig of layerConfigs) {
             this._layerConfigs[layerConfig.id] = layerConfig;
 
@@ -53,21 +53,17 @@ export class StyleLayerIndex {
             const layers = layerConfigs.map((layerConfig) => this._layers[layerConfig.id]);
 
             const layer = layers[0];
-            if (layer.visibility === 'none') {
+            if (layer.isHidden()) {
                 continue;
             }
 
             const sourceId = layer.source || '';
             let sourceGroup = this.familiesBySource[sourceId];
-            if (!sourceGroup) {
-                sourceGroup = this.familiesBySource[sourceId] = {};
-            }
+            sourceGroup ||= this.familiesBySource[sourceId] = {};
 
-            const sourceLayerId = layer.sourceLayer || '_geojsonTileLayer';
+            const sourceLayerId = layer.sourceLayer || GEOJSON_TILE_LAYER_NAME;
             let sourceLayerFamilies = sourceGroup[sourceLayerId];
-            if (!sourceLayerFamilies) {
-                sourceLayerFamilies = sourceGroup[sourceLayerId] = [];
-            }
+            sourceLayerFamilies ||= sourceGroup[sourceLayerId] = [];
 
             sourceLayerFamilies.push(layers);
         }

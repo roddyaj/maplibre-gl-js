@@ -1,17 +1,19 @@
 import {describe, beforeEach, afterEach, test, expect, vi} from 'vitest';
 import Point from '@mapbox/point-geometry';
+import {mat4} from 'gl-matrix';
 import {Terrain} from './terrain';
-import {Context} from '../gl/context';
+import {Context} from '../webgl/context';
 import {RGBAImage} from '../util/image';
-import type {TileManager} from '../tile/tile_manager';
 import {OverscaledTileID} from '../tile/tile_id';
+import {Tile} from '../tile/tile';
+import {LngLat} from '../geo/lng_lat';
+import {EXTENT} from '../data/extent';
+import {MAX_TILE_ZOOM, MIN_TILE_ZOOM} from '../util/util';
+import {MercatorTransform} from '../geo/projection/mercator_transform';
+import type {TileManager} from '../tile/tile_manager';
 import type {TerrainSpecification} from '@maplibre/maplibre-gl-style-spec';
 import type {DEMData} from '../data/dem_data';
-import {Tile} from '../tile/tile';
-import {type Painter} from './painter';
-import {mat4} from 'gl-matrix';
-import {LngLat} from '../geo/lng_lat';
-import {MAX_TILE_ZOOM, MIN_TILE_ZOOM} from '../util/util';
+import type {Painter} from './painter';
 
 describe('Terrain', () => {
     let gl: WebGLRenderingContext;
@@ -32,14 +34,15 @@ describe('Terrain', () => {
     });
 
     test('pointCoordinate should not return null', () => {
-        expect.assertions(2);
+        expect.assertions(3);
         const painter = {
             context: new Context(gl),
             width: 1,
             height: 1,
             pixelRatio: 1,
             transform: {center: {lng: 0}},
-            maybeDrawDepthAndCoords: vi.fn(),
+            maybeDrawDepth: vi.fn(),
+            maybeDrawCoords: vi.fn(),
         } as any as Painter;
         const tileManager = {_source: {tileSize: 512}} as TileManager;
         const getTileByID = (tileID) : Tile => {
@@ -47,13 +50,7 @@ describe('Terrain', () => {
                 return null as any as Tile;
             }
             return {
-                tileID: {
-                    canonical: {
-                        x: 0,
-                        y: 0,
-                        z: 0
-                    }
-                }
+                tileID: new OverscaledTileID(0, 0, 0, 0, 0),
             } as any as Tile;
         };
         const terrain = new Terrain(painter, tileManager, {} as any as TerrainSpecification);
@@ -63,7 +60,8 @@ describe('Terrain', () => {
         const coordinate = terrain.pointCoordinate(new Point(0, 0));
 
         expect(coordinate).not.toBeNull();
-        expect(painter.maybeDrawDepthAndCoords).toHaveBeenCalled();
+        expect(painter.maybeDrawDepth).toHaveBeenCalled();
+        expect(painter.maybeDrawCoords).toHaveBeenCalled();
 
     });
 
@@ -73,7 +71,8 @@ describe('Terrain', () => {
             context: new Context(gl),
             width: WORLD_WIDTH,
             height: 1,
-            maybeDrawDepthAndCoords: vi.fn(),
+            maybeDrawDepth: vi.fn(),
+            maybeDrawCoords: vi.fn(),
             pixelRatio,
         } as any as Painter;
         const tileManager = {_source: {tileSize: 512}} as TileManager;
@@ -102,26 +101,20 @@ describe('Terrain', () => {
         `pointCoordinate should return negative mercator x
         if the point is on the LEFT outside the central globe`,
         () => {
-            expect.assertions(2);
-            const pointX = 0;
             const terrain = setupMercatorOverflow();
-            const coordinate = terrain.pointCoordinate(new Point(pointX, 0));
+            const coordinate = terrain.pointCoordinate(new Point(0, 0));
 
             expect(coordinate.x).toBe(-1);
-            expect(terrain.painter.maybeDrawDepthAndCoords).toHaveBeenCalled();
         });
 
     test(
         `pointCoordinate should return mercator x greater than 1
         if the point is on the RIGHT outside the central globe`,
         () => {
-            expect.assertions(2);
-            const pointX = 3;
             const terrain = setupMercatorOverflow();
-            const coordinate = terrain.pointCoordinate(new Point(pointX, 0));
+            const coordinate = terrain.pointCoordinate(new Point(3, 0));
 
             expect(coordinate.x).toBe(2);
-            expect(terrain.painter.maybeDrawDepthAndCoords).toHaveBeenCalled();
         });
 
     test(
@@ -129,15 +122,8 @@ describe('Terrain', () => {
         () => {
             const terrain = setupMercatorOverflow(2);
 
-            let pointX = 0;
-            let coordinate = terrain.pointCoordinate(new Point(pointX, 0));
-            expect(coordinate.x).toBe(-1);
-            expect(terrain.painter.maybeDrawDepthAndCoords).toHaveBeenCalled();
-
-            pointX = 3;
-            coordinate = terrain.pointCoordinate(new Point(pointX, 0));
-            expect(coordinate.x).toBe(2);
-            expect(terrain.painter.maybeDrawDepthAndCoords).toHaveBeenCalled();
+            expect(terrain.pointCoordinate(new Point(0, 0)).x).toBe(-1);
+            expect(terrain.pointCoordinate(new Point(3, 0)).x).toBe(2);
         });
 
     test('Calculate tile minimum and maximum elevation', () => {
@@ -187,6 +173,9 @@ describe('Terrain', () => {
             _source: {maxzoom: 12, tileSize: 512},
             _cache: {max: 10},
             getTileByID: () => null,
+            _outOfViewCache: {
+                getByKey: () => null,
+            },
         } as any as TileManager;
         const terrain = new Terrain(
             painter,
@@ -279,29 +268,89 @@ describe('Terrain', () => {
                 };
             }
         };
-        expect(mockTerrain.getDEMElevation(null, 0, 0)).toBeCloseTo(0);
-        expect(mockTerrain.getDEMElevation(null, 1, 1)).toBeCloseTo(110);
-        expect(mockTerrain.getDEMElevation(null, 0, 0.5)).toBeCloseTo(5);
-        expect(mockTerrain.getDEMElevation(null, 1, 0.5)).toBeCloseTo(105);
-        expect(mockTerrain.getDEMElevation(null, 0.5, 0)).toBeCloseTo(50);
-        expect(mockTerrain.getDEMElevation(null, 0.5, 1)).toBeCloseTo(60);
-        expect(mockTerrain.getDEMElevation(null, 0.4, 0.2)).toBeCloseTo(42);
+        const tileID = new OverscaledTileID(0, 0, 0, 0, 0);
+        expect(mockTerrain.getDEMElevation(tileID, 0, 0)).toBeCloseTo(0);
+        expect(mockTerrain.getDEMElevation(tileID, 1, 1)).toBeCloseTo(110);
+        expect(mockTerrain.getDEMElevation(tileID, 0, 0.5)).toBeCloseTo(5);
+        expect(mockTerrain.getDEMElevation(tileID, 1, 0.5)).toBeCloseTo(105);
+        expect(mockTerrain.getDEMElevation(tileID, 0.5, 0)).toBeCloseTo(50);
+        expect(mockTerrain.getDEMElevation(tileID, 0.5, 1)).toBeCloseTo(60);
+        expect(mockTerrain.getDEMElevation(tileID, 0.4, 0.2)).toBeCloseTo(42);
+    });
+
+    test('getElevationForLngLat uses covering tiles to get the right zoom', () => {
+        const zoom = 10;
+        const painter = {
+            context: new Context(gl),
+            width: 1,
+            height: 1,
+            getTileTexture: () => null
+        } as any as Painter;
+        const tileManager = {
+            _source: {minzoom: 3, maxzoom: 22, tileSize: 512},
+            _cache: {max: 10},
+            getTileByID: () => {
+                return new Tile(new OverscaledTileID(zoom, 0, 0, 0, 0), 256);
+            },
+        } as any as TileManager;
+        const terrain = new Terrain(
+            painter,
+            tileManager,
+            {exaggeration: 2} as any as TerrainSpecification,
+        );
+
+        const spy = vi.fn();
+        terrain.getElevation = spy;
+        const transform = new MercatorTransform({minZoom: 3, maxZoom: 22, minPitch: 0, maxPitch: 85, renderWorldCopies: true});
+        transform.resize(200, 200);
+        transform.setZoom(zoom);
+        terrain.getElevationForLngLat(new LngLat(0, 0), transform);
+
+        expect(spy).toHaveBeenCalled();
+        expect((spy.mock.calls[0][0] as OverscaledTileID).canonical.z).toBe(zoom);
     });
 
     test('getElevationForLngLatZoom with lng less than -180 wraps correctly', () => {
         const terrain = new Terrain(null, {_source: {tileSize: 512}} as any, {} as any);
 
-        const OVERSCALETILEID_DOES_NOT_THROW = 4;
-        terrain.getElevation = () => OVERSCALETILEID_DOES_NOT_THROW;
-        expect(terrain.getElevationForLngLatZoom(new LngLat(-183, 40), 0)).toBe(OVERSCALETILEID_DOES_NOT_THROW);
+        terrain.getElevation = () => 1;
+        expect(terrain.getElevationForLngLatZoom(new LngLat(-183, 40), 0)).toBe(1);
     });
 
     test('getMinTileElevationForLngLatZoom with lng less than -180 wraps correctly', () => {
         const terrain = new Terrain(null, {_source: {tileSize: 512}} as any, {} as any);
 
-        const OVERSCALETILEID_DOES_NOT_THROW = 4;
-        terrain.getMinMaxElevation = () => ({minElevation: OVERSCALETILEID_DOES_NOT_THROW, maxElevation: 42});
-        expect(terrain.getMinTileElevationForLngLatZoom(new LngLat(-183, 40), 0)).toBe(OVERSCALETILEID_DOES_NOT_THROW);
+        terrain.getMinMaxElevation = () => ({minElevation: 1, maxElevation: 42});
+        expect(terrain.getMinTileElevationForLngLatZoom(new LngLat(-183, 40), 0)).toBe(1);
+    });
+
+    test('getDEMElevation normalizes out-of-bounds coordinates to neighbor tile', () => {
+        const terrain = new Terrain(null, {_source: {tileSize: 512}} as any, {} as any);
+        const spy = vi.fn().mockReturnValue({tile: null});
+        terrain.getTerrainData = spy;
+
+        // tile (0,0,1) with x beyond EXTENT should normalize to tile (1,0,1)
+        const tileID = new OverscaledTileID(1, 0, 1, 0, 0);
+        terrain.getDEMElevation(tileID, EXTENT + 100, 50);
+
+        expect(spy).toHaveBeenCalledOnce();
+        const [calledTileID] = spy.mock.calls[0];
+        expect(calledTileID.canonical.x).toBe(1);
+        expect(calledTileID.canonical.y).toBe(0);
+        expect(calledTileID.canonical.z).toBe(1);
+    });
+
+    test('getDEMElevation returns 0 for coordinates beyond tile grid', () => {
+        const terrain = new Terrain(null, {_source: {tileSize: 512}} as any, {} as any);
+        const spy = vi.fn();
+        terrain.getTerrainData = spy;
+
+        // tile (0,0,0) with y beyond EXTENT — no tile exists below at z=0
+        const tileID = new OverscaledTileID(0, 0, 0, 0, 0);
+        const result = terrain.getDEMElevation(tileID, 100, EXTENT + 100);
+
+        expect(result).toBe(0);
+        expect(spy).not.toHaveBeenCalled();
     });
 
     describe('getElevationForLngLatZoom returns 0 for out of bounds', () => {
@@ -322,6 +371,25 @@ describe('Terrain', () => {
         test('zoom', () => {
             expect(terrain.getElevationForLngLatZoom(new LngLat(0, 0), MAX_TILE_ZOOM + 1)).toBe(0);
         });
+    });
+
+    test('destroy does not throw', () => {
+        const context = new Context(gl);
+        const painter = {
+            context,
+            width: 100,
+            height: 100,
+            pixelRatio: 1,
+            style: {projection: null},
+        } as any as Painter;
+        const tileManager = {_source: {tileSize: 512}, destruct: vi.fn()} as any as TileManager;
+        const terrain = new Terrain(painter, tileManager, {} as any as TerrainSpecification);
+
+        terrain.getCoordsTexture();
+        terrain.getFramebuffer('coords');
+        terrain.getTerrainMesh(new OverscaledTileID(0, 0, 0, 0, 0));
+
+        expect(() => terrain.destroy()).not.toThrow();
     });
 
 });

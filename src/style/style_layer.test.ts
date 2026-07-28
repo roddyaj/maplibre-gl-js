@@ -186,6 +186,88 @@ describe('StyleLayer.setPaintProperty', () => {
         expect(layer.getPaintProperty('background-color-transition')).toBeUndefined();
     });
 
+    test('error prompts user to try setPaintProperty instead of setLayoutProperty', async() => {
+        const layer = createStyleLayer({
+            'id': 'symbol',
+            'type': 'symbol',
+            'layout': {
+                'text-transform': 'uppercase'
+            }
+        } as LayerSpecification, {});
+
+        const errorPromise = layer.once('error');
+        layer.setPaintProperty('visibility', 'visible');
+        const {error} = await errorPromise;
+        expect(error.message).toContain('Use get/setLayoutProperty instead?');
+    });
+});
+
+describe('StyleLayer.getPaintProperty', () => {
+    test('throws error when requesting a layout property via getPaintProperty', () => {
+        const layer = createStyleLayer({
+            'id': 'symbol',
+            'type': 'symbol',
+            'layout': {
+                'text-transform': 'uppercase'
+            }
+        } as LayerSpecification, {});
+
+        expect(() => layer.getPaintProperty('text-transform')).toThrow(
+            'Use get/setLayoutProperty instead?'
+        );
+    });
+
+    test('throws error when requesting a layout property transition via getPaintProperty', () => {
+        const layer = createStyleLayer({
+            'id': 'symbol',
+            'type': 'symbol',
+            'layout': {
+                'text-transform': 'uppercase'
+            }
+        } as LayerSpecification, {});
+
+        expect(() => layer.getPaintProperty('text-transform-transition')).toThrow(
+            'Use get/setLayoutProperty instead?'
+        );
+    });
+
+    test('throws error when requesting visibility via getPaintProperty', () => {
+        const layer = createStyleLayer({
+            'id': 'symbol',
+            'type': 'symbol',
+        } as LayerSpecification, {});
+
+        expect(() => layer.getPaintProperty('visibility')).toThrow(
+            'Use get/setLayoutProperty instead?'
+        );
+    });
+});
+
+describe('StyleLayer.getLayoutProperty', () => {
+    test('throws error on layer type with no layout properties', () => {
+        const layer = createStyleLayer({
+            'id': 'background',
+            'type': 'background',
+        } as LayerSpecification, {});
+
+        expect(() => layer.getLayoutProperty('some-property')).toThrow(
+            'Cannot get layout property "some-property" on layer type "background" which has no layout properties.'
+        );
+    });
+
+    test('throws error when requesting a paint property via getLayoutProperty', () => {
+        const layer = createStyleLayer({
+            'id': 'symbol',
+            'type': 'symbol',
+            'paint': {
+                'text-color': 'blue'
+            }
+        } as LayerSpecification, {});
+
+        expect(() => layer.getLayoutProperty('text-color')).toThrow(
+            'Use get/setPaintProperty instead?'
+        );
+    });
 });
 
 describe('StyleLayer.setLayoutProperty', () => {
@@ -241,6 +323,20 @@ describe('StyleLayer.setLayoutProperty', () => {
         expect(layer.layout.get('text-transform').value).toEqual({kind: 'constant', value: 'none'});
         expect(layer.getLayoutProperty('text-transform')).toBeUndefined();
     });
+    test('error prompts user to try setPaintProperty instead of setLayoutProperty', async() => {
+        const layer = createStyleLayer({
+            'id': 'symbol',
+            'type': 'symbol',
+            'paint': {
+                'text-color': 'blue'
+            }
+        } as LayerSpecification, {});
+
+        const errorPromise = layer.once('error');
+        layer.setLayoutProperty('text-color', 'blue');
+        const {error} = await errorPromise;
+        expect(error.message).toContain('Use get/setPaintProperty instead?');
+    });
 });
 
 describe('StyleLayer.getLayoutAffectingGlobalStateRefs', () => {
@@ -280,6 +376,18 @@ describe('StyleLayer.getLayoutAffectingGlobalStateRefs', () => {
         }, {});
 
         expect(layer.getLayoutAffectingGlobalStateRefs()).toEqual(new Set<string>(['textSize', 'textTransform']));
+    });
+
+    test('returns global-state references from visibility', () => {
+        const layer = createStyleLayer({
+            id: 'background',
+            type: 'background',
+            layout: {
+                'visibility': ['global-state', 'visibility']
+            }
+        } as LayerSpecification, {});
+
+        expect(layer.getLayoutAffectingGlobalStateRefs()).toEqual(new Set<string>(['visibility']));
     });
 });
 
@@ -486,5 +594,23 @@ describe('StyleLayer.globalState', () => {
 
         expect(layer.paint.get('circle-color').evaluate(undefined, {})).toEqual(new Color(1, 0, 0, 1));
         expect(layer.paint.get('circle-radius').evaluate(undefined, {})).toBe(15);
+    });
+
+    test('uses layer global state when recalculating visiblity', () => {
+        const globalState = {visibility: 'none'};
+        const layer = createStyleLayer({
+            id: 'background',
+            type: 'background',
+            layout: {
+                'visibility': ['global-state', 'visibility']
+            }
+        } as LayerSpecification, globalState) as BackgroundStyleLayer;
+
+        expect(layer.isHidden()).toBe(true);
+
+        globalState.visibility = 'visible';
+        layer.recalculateVisibility();
+
+        expect(layer.isHidden()).toBe(false);
     });
 });

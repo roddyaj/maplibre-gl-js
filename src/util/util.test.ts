@@ -1,6 +1,6 @@
 import {describe, beforeEach, test, expect, vi} from 'vitest';
 import Point from '@mapbox/point-geometry';
-import {arraysIntersect, bezier, clamp, clone, deepEqual, easeCubicInOut, extend, filterObject, findLineIntersection, isCounterClockwise, isPowerOfTwo, keysDifference, mapObject, nextPowerOfTwo, parseCacheControl, pick, readImageDataUsingOffscreenCanvas, readImageUsingVideoFrame, uniqueId, wrap, mod, distanceOfAnglesRadians, distanceOfAnglesDegrees, differenceOfAnglesRadians, differenceOfAnglesDegrees, solveQuadratic, remapSaturate, getEdgeTiles, radiansToDegrees, degreesToRadians, rollPitchBearingToQuat, getRollPitchBearing, getAngleDelta, scaleZoom, zoomScale, threePlaneIntersection, pointPlaneSignedDistance} from './util';
+import {arraysIntersect, bezier, clamp, clone, deepEqual, easeCubicInOut, extend, filterObject, findLineIntersection, isCounterClockwise, isPowerOfTwo, keysDifference, mapObject, nextPowerOfTwo, parseCacheControl, pick, readImageDataUsingOffscreenCanvas, readImageUsingVideoFrame, uniqueId, wrap, mod, distanceOfAnglesRadians, distanceOfAnglesDegrees, differenceOfAnglesRadians, differenceOfAnglesDegrees, solveQuadratic, remapSaturate, getEdgeTiles, radiansToDegrees, degreesToRadians, rollPitchBearingToQuat, getRollPitchBearing, getAngleDelta, scaleZoom, zoomScale, threePlaneIntersection, pointPlaneSignedDistance, evaluateZoomSnap} from './util';
 import {Canvas} from 'canvas';
 import {OverscaledTileID} from '../tile/tile_id';
 import {expectToBeCloseToArray} from './test/util';
@@ -72,7 +72,7 @@ describe('util', () => {
 
     test('mapObject', () => {
         expect.assertions(5);
-        expect(mapObject({}, () => { expect(false).toBeTruthy(); })).toEqual({});
+        expect(mapObject({}, () => expect(false).toBeTruthy())).toEqual({});
         const that = {};
         expect(mapObject({map: 'box'}, (value, key, object) => {
             expect(value).toBe('box');
@@ -84,9 +84,9 @@ describe('util', () => {
 
     test('filterObject', () => {
         expect.assertions(6);
-        expect(filterObject({}, () => { expect(false).toBeTruthy(); })).toEqual({});
+        expect(filterObject({}, () => expect(false).toBeTruthy())).toEqual({});
         const that = {};
-        filterObject({map: 'box'}, function(value, key, object) {
+        filterObject({map: 'box'}, function(this: Record<string, never>, value: string, key: string, object: Record<string, string>) {
             expect(value).toBe('box');
             expect(key).toBe('map');
             expect(object).toEqual({map: 'box'});
@@ -604,6 +604,26 @@ describe('util scaleZoom and zoomScale relation', () => {
         expect(scaleZoom(10)).toBe(3.3219280948873626);
         expect(zoomScale(3.3219280948873626)).toBeCloseTo(10, 10);
         expect(scaleZoom(zoomScale(5))).toBe(5);
+    });
+});
+
+describe('evaluateZoomSnap', () => {
+    test('evaluateZoomSnap logic', () => {
+        expect(evaluateZoomSnap(9.1, 0.5)).toBe(9.0);
+        expect(evaluateZoomSnap(9.6, 1.0)).toBe(10.0);
+        expect(evaluateZoomSnap(9.63, 0)).toBe(9.63);
+    });
+
+    test('evaluateZoomSnap directional logic, when delta is defined and positive (snapping up)', () => {
+        expect(evaluateZoomSnap(9.1, 1.0, 1.0)).toBe(10.0);
+        expect(evaluateZoomSnap(10.0, 1.0, 1.0)).toBe(10.0);
+        expect(evaluateZoomSnap(10.00000001, 1.0, 1.0)).toBe(11.0);
+    });
+
+    test('evaluateZoomSnap directional logic, when delta is defined and negative (snapping down)', () => {
+        expect(evaluateZoomSnap(9.9, 1.0, -1.0)).toBe(9.0);
+        expect(evaluateZoomSnap(9.1, 1.0, -1.0)).toBe(9.0);
+        expect(evaluateZoomSnap(8.999999999, 1.0, -1.0)).toBe(8.0);
     });
 });
 

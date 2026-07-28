@@ -1,16 +1,17 @@
 import {extend} from '../util/util';
 import {Event, Evented} from '../util/evented';
-import {type MapMouseEvent} from './events';
 import {DOM} from '../util/dom';
 import {LngLat} from '../geo/lng_lat';
 import Point from '@mapbox/point-geometry';
 import {smartWrap} from '../util/smart_wrap';
 import {anchorTranslate, applyAnchorClass} from './anchor';
 
+import type {MapLibreEvent, MapMouseEvent} from './events';
 import type {PositionAnchor} from './anchor';
 import type {Map} from './map';
 import type {LngLatLike} from '../geo/lng_lat';
 import type {PointLike} from './camera';
+import type {PaddingOptions} from '../geo/edge_insets';
 
 const defaultOptions = {
     closeButton: true,
@@ -20,6 +21,7 @@ const defaultOptions = {
     maxWidth: '240px',
     subpixelPositioning: false,
     locationOccludedOpacity: undefined,
+    padding: undefined,
 };
 
 /**
@@ -95,6 +97,13 @@ export type PopupOptions = {
      * @defaultValue undefined
      */
     locationOccludedOpacity?: number | string;
+    /**
+     * A pixel padding applied to the popup's positioning constraints.
+     * The popup will be positioned to avoid being placed within this padding area
+     * from the edges of the map container.
+     * @defaultValue undefined
+     */
+    padding?: PaddingOptions;
 };
 
 const focusQuerySelector = [
@@ -158,6 +167,7 @@ const focusQuerySelector = [
  * @see [Display a popup on hover](https://maplibre.org/maplibre-gl-js/docs/examples/display-a-popup-on-hover/)
  * @see [Display a popup on click](https://maplibre.org/maplibre-gl-js/docs/examples/display-a-popup-on-click/)
  * @see [Attach a popup to a marker instance](https://maplibre.org/maplibre-gl-js/docs/examples/attach-a-popup-to-a-marker-instance/)
+ * @see [Show polygon information on click](https://maplibre.org/maplibre-gl-js/docs/examples/show-polygon-information-on-click/)
  *
  * ## Events
  *
@@ -214,12 +224,14 @@ export class Popup extends Evented {
         }
 
         this._map.on('remove', this.remove);
+        this._map.on('terrain', this._update);
+        this._map.on('projectiontransition', this._update);
         this._update();
         this._focusFirstElement();
 
         if (this._trackPointer) {
-            this._map.on('mousemove', this._onMouseMove);
-            this._map.on('mouseup', this._onMouseUp);
+            this._map.on('mousemove', this._update);
+            this._map.on('mouseup', this._update);
             if (this._container) {
                 this._container.classList.add('maplibregl-popup-track-pointer');
             }
@@ -265,11 +277,11 @@ export class Popup extends Evented {
      */
     remove = (): this => {
         if (this._content) {
-            DOM.remove(this._content);
+            this._content.remove();
         }
 
         if (this._container) {
-            DOM.remove(this._container);
+            this._container.remove();
             delete this._container;
         }
 
@@ -278,9 +290,11 @@ export class Popup extends Evented {
             this._map.off('move', this._onClose);
             this._map.off('click', this._onClose);
             this._map.off('remove', this.remove);
-            this._map.off('mousemove', this._onMouseMove);
-            this._map.off('mouseup', this._onMouseUp);
-            this._map.off('drag', this._onDrag);
+            this._map.off('terrain', this._update);
+            this._map.off('projectiontransition', this._update);
+            this._map.off('mousemove', this._update);
+            this._map.off('mouseup', this._update);
+            this._map.off('drag', this._update);
             this._map._canvasContainer.classList.remove('maplibregl-track-pointer');
             delete this._map;
             this.fire(new Event('close'));
@@ -318,7 +332,7 @@ export class Popup extends Evented {
 
         if (this._map) {
             this._map.on('move', this._update);
-            this._map.off('mousemove', this._onMouseMove);
+            this._map.off('mousemove', this._update);
             if (this._container) {
                 this._container.classList.remove('maplibregl-popup-track-pointer');
             }
@@ -346,8 +360,8 @@ export class Popup extends Evented {
         this._update();
         if (this._map) {
             this._map.off('move', this._update);
-            this._map.on('mousemove', this._onMouseMove);
-            this._map.on('drag', this._onDrag);
+            this._map.on('mousemove', this._update);
+            this._map.on('drag', this._update);
             if (this._container) {
                 this._container.classList.add('maplibregl-popup-track-pointer');
             }
@@ -567,6 +581,20 @@ export class Popup extends Evented {
         this.options.subpixelPositioning = value;
     }
 
+    /**
+     * Sets the popup's padding constraints for positioning.
+     *
+     * @param padding - The padding to apply as a {@link PaddingOptions} object.
+     * @example
+     * ```ts
+     * popup.setPadding({ top: 10, right: 20, bottom: 30, left: 40 });
+     * ```
+     */
+    setPadding(padding?: PaddingOptions) {
+        this.options.padding = padding;
+        this._update();
+    }
+
     _createCloseButton() {
         if (this.options.closeButton) {
             this._closeButton = DOM.create('button', 'maplibregl-popup-close-button', this._content);
@@ -576,19 +604,8 @@ export class Popup extends Evented {
         }
     }
 
-    _onMouseUp = (event: MapMouseEvent) => {
-        this._update(event.point);
-    };
-
-    _onMouseMove = (event: MapMouseEvent) => {
-        this._update(event.point);
-    };
-
-    _onDrag = (event: MapMouseEvent) => {
-        this._update(event.point);
-    };
-
-    _update = (cursor?: Point) => {
+    _update = (event?: MapLibreEvent | MapMouseEvent) => {
+        
         const hasPosition = this._lngLat || this._trackPointer;
 
         if (!this._map || !hasPosition || !this._content) { return; }
@@ -618,6 +635,10 @@ export class Popup extends Evented {
 
         this._lngLat = smartWrap(this._lngLat, this._flatPos, this._map.transform, this._trackPointer);
 
+        let cursor: Point;
+        if (event && 'point' in event && event.point) {
+            cursor = event.point;
+        }
         if (this._trackPointer && !cursor) return;
 
         const pos = this._flatPos = this._pos = this._trackPointer && cursor ? cursor : this._map.project(this._lngLat);
@@ -632,19 +653,20 @@ export class Popup extends Evented {
         if (!anchor) {
             const width = this._container.offsetWidth;
             const height = this._container.offsetHeight;
-            let anchorComponents;
+            const padding = normalizePadding(this.options.padding);
+            let anchorComponents: string[];
 
-            if (pos.y + offset.bottom.y < height) {
+            if (pos.y + offset.bottom.y < height + padding.top) {
                 anchorComponents = ['top'];
-            } else if (pos.y > this._map.transform.height - height) {
+            } else if (pos.y > this._map.transform.height - height - padding.bottom) {
                 anchorComponents = ['bottom'];
             } else {
                 anchorComponents = [];
             }
 
-            if (pos.x < width / 2) {
+            if (pos.x < width / 2 + padding.left) {
                 anchorComponents.push('left');
-            } else if (pos.x > this._map.transform.width - width / 2) {
+            } else if (pos.x > this._map.transform.width - width / 2 - padding.right) {
                 anchorComponents.push('right');
             }
 
@@ -661,7 +683,7 @@ export class Popup extends Evented {
             offsetedPos = offsetedPos.round();
         }
 
-        DOM.setTransform(this._container, `${anchorTranslate[anchor]} translate(${offsetedPos.x}px,${offsetedPos.y}px)`);
+        this._container.style.transform = `${anchorTranslate[anchor]} translate(${offsetedPos.x}px,${offsetedPos.y}px)`;
         applyAnchorClass(this._container, anchor, 'popup');
 
         this._updateOpacity();
@@ -670,7 +692,7 @@ export class Popup extends Evented {
     _focusFirstElement() {
         if (!this.options.focusAfterOpen || !this._container) return;
 
-        const firstFocusable = this._container.querySelector(focusQuerySelector) as HTMLElement;
+        const firstFocusable = this._container.querySelector<HTMLElement>(focusQuerySelector);
 
         if (firstFocusable) firstFocusable.focus();
     }
@@ -728,4 +750,17 @@ function normalizeOffset(offset?: Offset | null) {
             'right': Point.convert(offset['right'] || [0, 0])
         };
     }
+}
+
+function normalizePadding(padding?: PaddingOptions | null): {top: number; right: number; bottom: number; left: number} {
+    if (!padding) {
+        return {top: 0, right: 0, bottom: 0, left: 0};
+    }
+
+    return {
+        top: padding.top ?? 0,
+        right: padding.right ?? 0,
+        bottom: padding.bottom ?? 0,
+        left: padding.left ?? 0
+    };
 }

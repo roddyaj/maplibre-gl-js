@@ -6,8 +6,8 @@ import properties, {FillHeatmapPaintPropsPossiblyEvaluated} from './fill_heatmap
 import {renderColorRamp} from '../../util/color_ramp';
 import {Transitionable, Transitioning, PossiblyEvaluated} from '../properties';
 
-import type {Texture} from '../../render/texture';
-import type {Framebuffer} from '../../gl/framebuffer';
+import type {Texture} from '../../webgl/texture';
+import type {Framebuffer} from '../../webgl/framebuffer';
 import type {FillHeatmapPaintProps} from './fill_heatmap_style_layer_properties.g';
 import type {LayerSpecification} from '@maplibre/maplibre-gl-style-spec';
 

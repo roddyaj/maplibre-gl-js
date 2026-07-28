@@ -3,7 +3,7 @@ import {FillLayoutArray} from '../array_types.g';
 import {members as layoutAttributes} from './fill_attributes';
 import {SegmentVector} from '../segment';
 import {ProgramConfigurationSet} from '../program_configuration';
-import {TriangleIndexArray} from '../index_array_type';
+import {TriangleIndexArray} from '../array_types.g';
 import earcut from 'earcut';
 import {classifyRings} from '@maplibre/maplibre-gl-style-spec';
 const EARCUT_MAX_RINGS = 500;
@@ -27,7 +27,7 @@ import type {VertexBuffer} from '../../webgl/vertex_buffer';
 import type Point from '@mapbox/point-geometry';
 import type {FeatureStates} from '../../source/source_state';
 import type {ImagePosition} from '../../render/image_atlas';
-import type {VectorTileLayer} from '@mapbox/vector-tile';
+import type {VectorTileLayerLike} from '@maplibre/vt-pbf';
 
 export class FillHeatmapBucket implements Bucket {
     index: number;
@@ -96,7 +96,7 @@ export class FillHeatmapBucket implements Bucket {
         }
     }
 
-    update(states: FeatureStates, vtLayer: VectorTileLayer, imagePositions: {
+    update(states: FeatureStates, vtLayer: VectorTileLayerLike, imagePositions: {
         [_: string]: ImagePosition;
     }) {
         if (!this.stateDependentLayers.length) return;

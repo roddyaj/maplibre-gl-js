@@ -74,7 +74,7 @@ export class FillHeatmapStyleLayer extends StyleLayer {
     }
 
     hasOffscreenPass() {
-        return this.paint.get('fill-heatmap-opacity') !== 0 && this.visibility !== 'none';
+        return this.paint.get('fill-heatmap-opacity') !== 0 && !this.isHidden();
     }
 
     isTileClipped() {

@@ -1,18 +1,19 @@
 import {describe, beforeEach, test, expect, vi, type MockInstance} from 'vitest';
 import * as timeControl from '../../util/time_control';
-import {Map} from '../../ui/map';
+import {Map, type MapOptions} from '../../ui/map';
 import {DOM} from '../../util/dom';
 import simulate from '../../../test/unit/lib/simulate_interaction';
 import {setPerformance, beforeMapTest, createTerrain} from '../../util/test/util';
 
-function createMap() {
+function createMap(options: Partial<MapOptions> = {}) {
     return new Map({
         container: DOM.create('div', '', window.document.body),
         style: {
             'version': 8,
             'sources': {},
             'layers': []
-        }
+        },
+        ...options
     });
 }
 
@@ -21,7 +22,6 @@ function scrollOutAtLat(map: Map, lat: number, timeControlNow: MockInstance<() =
     map.setZoom(1);
     for (let i = 0; i < 200; i++) {
         simulate.wheel(map.getCanvas(), {
-            type: 'wheel',
             deltaY,
             clientX: map.transform.width / 2,
             clientY: map.transform.height / 2});
@@ -47,7 +47,7 @@ describe('ScrollZoomHandler', () => {
         // simulate a single 'wheel' event
         const startZoom = map.getZoom();
 
-        simulate.wheel(map.getCanvas(), {type: 'wheel', deltaY: -simulate.magicWheelZoomDelta});
+        simulate.wheel(map.getCanvas(), {deltaY: -simulate.magicWheelZoomDelta});
         map._renderTaskQueue.run();
 
         now += 400;
@@ -71,7 +71,7 @@ describe('ScrollZoomHandler', () => {
         // simulate a single 'wheel' event
         const startZoom = map.getZoom();
 
-        simulate.wheel(map.getCanvas(), {type: 'wheel', deltaY: -simulate.magicWheelZoomDelta});
+        simulate.wheel(map.getCanvas(), {deltaY: -simulate.magicWheelZoomDelta});
         map._renderTaskQueue.run();
 
         // A single tick zoom with easing completes in approx. 200ms
@@ -105,9 +105,8 @@ describe('ScrollZoomHandler', () => {
         const iterations = 10;
 
         for (let i = 0; i < iterations; i++) {
-            simulate.wheel(map.getCanvas(), {type: 'wheel', deltaY: -simulate.magicWheelZoomDelta});
+            simulate.wheel(map.getCanvas(), {deltaY: -simulate.magicWheelZoomDelta});
             map._renderTaskQueue.run();
-            now += 0;
             timeControlNow.mockReturnValue(now);
             map._renderTaskQueue.run();
         }
@@ -137,9 +136,8 @@ describe('ScrollZoomHandler', () => {
         const iterations = 10;
 
         for (let i = 0; i < iterations; i++) {
-            simulate.wheel(map.getCanvas(), {type: 'wheel', deltaY: -simulate.magicWheelZoomDelta});
+            simulate.wheel(map.getCanvas(), {deltaY: -simulate.magicWheelZoomDelta});
             map._renderTaskQueue.run();
-            now += 0;
             timeControlNow.mockReturnValue(now);
             map._renderTaskQueue.run();
 
@@ -160,8 +158,9 @@ describe('ScrollZoomHandler', () => {
     });
 
     test('Zooms for single mouse wheel tick with non-magical deltaY', async () => {
+        vi.useFakeTimers();
         const timeControlNow = vi.spyOn(timeControl, 'now');
-        const now = 1555555555555;
+        let now = 1555555555555;
         timeControlNow.mockReturnValue(now);
 
         const map = createMap();
@@ -170,9 +169,17 @@ describe('ScrollZoomHandler', () => {
         // Simulate a single 'wheel' event without the magical deltaY value.
         // This requires the handler to briefly wait to see if a subsequent
         // event is coming in order to guess trackpad vs. mouse wheel
-        simulate.wheel(map.getCanvas(), {type: 'wheel', deltaY: -20});
-        await map.once('zoomstart');
-        map.remove();  
+        simulate.wheel(map.getCanvas(), {deltaY: -20});
+
+        // Advance time to trigger the 40ms timeout
+        now += 100;
+        timeControlNow.mockReturnValue(now);
+        vi.advanceTimersByTime(100);
+        map._renderTaskQueue.run();
+
+        expect(map.isZooming()).toBe(true);
+        map.remove();
+        vi.useRealTimers();
     });
 
     test('Zooms for single mouse wheel tick with non-magical deltaY with easing for smooth zooming', async () => {
@@ -187,7 +194,7 @@ describe('ScrollZoomHandler', () => {
         const startZoom = map.getZoom();
 
         // simulate a single 'wheel' event with non-magical deltaY
-        simulate.wheel(map.getCanvas(), {type: 'wheel', deltaY: -20});
+        simulate.wheel(map.getCanvas(), {deltaY: -20});
         await map.once('zoom');
         now += 40;
         map._renderTaskQueue.run();
@@ -223,19 +230,19 @@ describe('ScrollZoomHandler', () => {
         now += 2;
         timeControlNow.mockReturnValue(now);
         map._renderTaskQueue.run();
-        simulate.wheel(map.getCanvas(), {type: 'wheel', deltaY: -simulate.magicWheelZoomDelta});
+        simulate.wheel(map.getCanvas(), {deltaY: -simulate.magicWheelZoomDelta});
         map._renderTaskQueue.run();
 
         now += 7;
         timeControlNow.mockReturnValue(now);
         map._renderTaskQueue.run();
-        simulate.wheel(map.getCanvas(), {type: 'wheel', deltaY: -simulate.magicWheelZoomDelta});
+        simulate.wheel(map.getCanvas(), {deltaY: -simulate.magicWheelZoomDelta});
         map._renderTaskQueue.run();
 
         now += 30;
         timeControlNow.mockReturnValue(now);
         map._renderTaskQueue.run();
-        simulate.wheel(map.getCanvas(), {type: 'wheel', deltaY: -simulate.magicWheelZoomDelta});
+        simulate.wheel(map.getCanvas(), {deltaY: -simulate.magicWheelZoomDelta});
         map._renderTaskQueue.run();
 
         now += 400;
@@ -261,7 +268,7 @@ describe('ScrollZoomHandler', () => {
         now += 2;
         timeControlNow.mockReturnValue(now);
         map._renderTaskQueue.run();
-        simulate.wheel(map.getCanvas(), {type: 'wheel', deltaY: -simulate.magicWheelZoomDelta});
+        simulate.wheel(map.getCanvas(), {deltaY: -simulate.magicWheelZoomDelta});
         const startZoomEvent1 = map.getZoom();
         map._renderTaskQueue.run();
 
@@ -277,7 +284,7 @@ describe('ScrollZoomHandler', () => {
         map._renderTaskQueue.run();
         const endZoomEvent1 = map.getZoom();
         const startZoomEvent2 = map.getZoom();
-        simulate.wheel(map.getCanvas(), {type: 'wheel', deltaY: -simulate.magicWheelZoomDelta});
+        simulate.wheel(map.getCanvas(), {deltaY: -simulate.magicWheelZoomDelta});
         map._renderTaskQueue.run();
 
         // Event 2 mid-zoom
@@ -292,7 +299,7 @@ describe('ScrollZoomHandler', () => {
         map._renderTaskQueue.run();
         const endZoomEvent2 = map.getZoom();
         const startZoomEvent3 = map.getZoom();
-        simulate.wheel(map.getCanvas(), {type: 'wheel', deltaY: -simulate.magicWheelZoomDelta});
+        simulate.wheel(map.getCanvas(), {deltaY: -simulate.magicWheelZoomDelta});
         map._renderTaskQueue.run();
 
         // Event 3 mid-zoom
@@ -329,10 +336,10 @@ describe('ScrollZoomHandler', () => {
 
         const startZoom = map.getZoom();
         // simulate  shift+'wheel' events
-        simulate.wheel(map.getCanvas(), {type: 'wheel', deltaY: -0, shiftKey: true});
-        simulate.wheel(map.getCanvas(), {type: 'wheel', deltaY: -0, shiftKey: true});
-        simulate.wheel(map.getCanvas(), {type: 'wheel', deltaY: -0, shiftKey: true});
-        simulate.wheel(map.getCanvas(), {type: 'wheel', deltaY: -0, shiftKey: true});
+        simulate.wheel(map.getCanvas(), {deltaY: -0, shiftKey: true});
+        simulate.wheel(map.getCanvas(), {deltaY: -0, shiftKey: true});
+        simulate.wheel(map.getCanvas(), {deltaY: -0, shiftKey: true});
+        simulate.wheel(map.getCanvas(), {deltaY: -0, shiftKey: true});
         map._renderTaskQueue.run();
 
         now += 400;
@@ -353,11 +360,11 @@ describe('ScrollZoomHandler', () => {
         const map = createMap();
         map._renderTaskQueue.run();
 
-        simulate.wheel(map.getCanvas(), {type: 'wheel', deltaY: -1});
-        simulate.wheel(map.getCanvas(), {type: 'wheel', deltaY: -1});
+        simulate.wheel(map.getCanvas(), {deltaY: -1});
+        simulate.wheel(map.getCanvas(), {deltaY: -1});
         now += 1;
         timeControlNow.mockReturnValue(now);
-        simulate.wheel(map.getCanvas(), {type: 'wheel', deltaY: 2});
+        simulate.wheel(map.getCanvas(), {deltaY: 2});
 
         map._renderTaskQueue.run();
 
@@ -375,9 +382,9 @@ describe('ScrollZoomHandler', () => {
 
         const map = createMap();
 
-        map.on('wheel', e => e.preventDefault());
+        map.on('wheel', e => { e.preventDefault(); });
 
-        simulate.wheel(map.getCanvas(), {type: 'wheel', deltaY: -simulate.magicWheelZoomDelta});
+        simulate.wheel(map.getCanvas(), {deltaY: -simulate.magicWheelZoomDelta});
         map._renderTaskQueue.run();
 
         now += 400;
@@ -409,8 +416,8 @@ describe('ScrollZoomHandler', () => {
         const events = [
             [2, {type: 'trackpad', deltaY: -1}],
             [7, {type: 'trackpad', deltaY: -2}],
-            [30, {type: 'wheel', deltaY: -5}]
-        ] as [number, any][];
+            [30, {deltaY: -5}]
+        ] as Array<[number, any]>;
 
         const end = now + 50;
         let lastWheelEvent = now;
@@ -459,8 +466,8 @@ describe('ScrollZoomHandler', () => {
         const events = [
             [2, {type: 'trackpad', deltaY: -1}],
             [7, {type: 'trackpad', deltaY: -2}],
-            [30, {type: 'wheel', deltaY: -5}],
-        ] as [number, any][];
+            [30, {deltaY: -5}],
+        ] as Array<[number, any]>;
 
         const end = now + 50;
         let lastWheelEvent = now;
@@ -498,7 +505,7 @@ describe('ScrollZoomHandler', () => {
         expect(map.getCenter().lng).toBeCloseTo(0, 10);
 
         // simulate a single 'wheel' event
-        simulate.wheel(map.getCanvas(), {type: 'wheel', deltaY: -simulate.magicWheelZoomDelta, clientX: 200, clientY: 150});
+        simulate.wheel(map.getCanvas(), {deltaY: -simulate.magicWheelZoomDelta, clientX: 200, clientY: 150});
         map._renderTaskQueue.run();
 
         now += 400;
@@ -523,7 +530,7 @@ describe('ScrollZoomHandler', () => {
         map.terrain = createTerrain();
 
         // simulate a single 'wheel' event
-        simulate.wheel(map.getCanvas(), {type: 'wheel', deltaY: -simulate.magicWheelZoomDelta, clientX: 1000, clientY: 1000});
+        simulate.wheel(map.getCanvas(), {deltaY: -simulate.magicWheelZoomDelta, clientX: 1000, clientY: 1000});
         map._renderTaskQueue.run();
 
         now += 400;
@@ -548,7 +555,7 @@ describe('ScrollZoomHandler', () => {
         map.terrain = createTerrain();
 
         // simulate a single 'wheel' event
-        simulate.wheel(map.getCanvas(), {type: 'wheel', deltaY: -simulate.magicWheelZoomDelta, clientX: 1000, clientY: 1000});
+        simulate.wheel(map.getCanvas(), {deltaY: -simulate.magicWheelZoomDelta, clientX: 1000, clientY: 1000});
         map._renderTaskQueue.run();
 
         now += 400;
@@ -577,7 +584,7 @@ describe('ScrollZoomHandler', () => {
         map._renderTaskQueue.run();
 
         // simulate a single 'wheel' event on top of screen
-        simulate.wheel(map.getCanvas(), {type: 'wheel', deltaY: -simulate.magicWheelZoomDelta, clientX: map.getCanvas().width / 2, clientY: 10});
+        simulate.wheel(map.getCanvas(), {deltaY: -simulate.magicWheelZoomDelta, clientX: map.getCanvas().width / 2, clientY: 10});
         map._renderTaskQueue.run();
 
         now += 400;
@@ -601,7 +608,7 @@ describe('ScrollZoomHandler', () => {
         map._renderTaskQueue.run();
 
         // simulate a single 'wheel' event on bottom of screen
-        simulate.wheel(map.getCanvas(), {type: 'wheel', deltaY: -simulate.magicWheelZoomDelta, clientX: map.getCanvas().width / 2, clientY: map.getCanvas().height - 10});
+        simulate.wheel(map.getCanvas(), {deltaY: -simulate.magicWheelZoomDelta, clientX: map.getCanvas().width / 2, clientY: map.getCanvas().height - 10});
         map._renderTaskQueue.run();
 
         now += 400;
@@ -667,5 +674,115 @@ describe('ScrollZoomHandler', () => {
         expect(map.getZoom()).toBeCloseTo(0, 2);
 
         map.remove();
+    });
+
+    describe('zoomSnap', () => {
+        test('Mouse wheel settles on a snapped zoom level', async () => {
+            vi.useFakeTimers();
+            const timeControlNow = vi.spyOn(timeControl, 'now');
+            let now = 1555555555555;
+            timeControlNow.mockReturnValue(now);
+            setPerformance();
+
+            const map = createMap({zoomSnap: 1.0});
+            map.setZoom(10);
+
+            // Initial render
+            map._renderTaskQueue.run();
+
+            // Simulate wheel event
+            simulate.wheel(map.getCanvas(), {deltaY: -simulate.magicWheelZoomDelta});
+            map._renderTaskQueue.run();
+
+            // Advance time to finish the easing (200ms)
+            for (let i = 0; i < 20; i++) {
+                now += 20;
+                timeControlNow.mockReturnValue(now);
+                vi.advanceTimersByTime(20);
+                map._renderTaskQueue.run();
+            }
+
+            expect(map.getZoom()).toBe(11.0);
+            map.remove();
+            vi.useRealTimers();
+        });
+
+        test('Trackpad scroll stays smooth and does not snap', async () => {
+            vi.useFakeTimers();
+            const timeControlNow = vi.spyOn(timeControl, 'now');
+            let now = 1555555555555;
+            timeControlNow.mockReturnValue(now);
+            setPerformance();
+
+            const map = createMap({zoomSnap: 0.5});
+            map.setZoom(10);
+            map._renderTaskQueue.run();
+
+            // Simulate trackpad pinch (ctrlKey: true, small delta)
+            simulate.wheel(map.getCanvas(), {deltaY: -2, ctrlKey: true, clientX: 0, clientY: 0});
+            map._renderTaskQueue.run();
+
+            // Should be fractional during the gesture
+            const zoomDuring = map.getZoom();
+            expect(zoomDuring).toBeGreaterThan(10.0);
+            expect(zoomDuring).toBeLessThan(10.1);
+
+            // Advance time to trigger finishTimeout (200ms)
+            for (let i = 0; i < 11; i++) {
+                now += 20;
+                timeControlNow.mockReturnValue(now);
+                vi.advanceTimersByTime(20);
+                map._renderTaskQueue.run();
+            }
+
+            // Should REMAIN fractional (no snap) even if zoomSnap is defined
+            expect(map.getZoom()).toBe(zoomDuring);
+
+            map.remove();
+            vi.useRealTimers();
+        });
+
+        test('Snapping animation is interrupted by new scroll', async () => {
+            vi.useFakeTimers();
+            const timeControlNow = vi.spyOn(timeControl, 'now');
+            let now = 1555555555555;
+            timeControlNow.mockReturnValue(now);
+            setPerformance();
+
+            const map = createMap({zoomSnap: 1.0});
+            map.setZoom(10);
+            map._renderTaskQueue.run();
+
+            // Trigger a wheel event
+            simulate.wheel(map.getCanvas(), {deltaY: -simulate.magicWheelZoomDelta});
+            map._renderTaskQueue.run();
+
+            // Advance to the end of the wheel scroll easing
+            for (let i = 0; i < 15; i++) {
+                now += 20;
+                timeControlNow.mockReturnValue(now);
+                vi.advanceTimersByTime(20);
+                map._renderTaskQueue.run();
+            }
+
+            const zoomBeforeInterrupt = map.getZoom();
+            expect(zoomBeforeInterrupt).toBeGreaterThan(10.0);
+
+            // Immediately start a new scroll while the animation may still be running
+            simulate.wheel(map.getCanvas(), {deltaY: -simulate.magicWheelZoomDelta});
+            map._renderTaskQueue.run();
+
+            // Advance time to start movement
+            now += 20;
+            timeControlNow.mockReturnValue(now);
+            vi.advanceTimersByTime(20);
+            map._renderTaskQueue.run();
+
+            // The zoom should be moving again from where it was
+            expect(map.getZoom()).toBeGreaterThan(zoomBeforeInterrupt);
+
+            map.remove();
+            vi.useRealTimers();
+        });
     });
 });

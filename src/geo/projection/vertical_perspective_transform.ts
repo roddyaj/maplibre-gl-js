@@ -114,7 +114,7 @@ export class VerticalPerspectiveTransform implements ITransform {
         this._helper.setPadding(padding);
     }
     interpolatePadding(start: PaddingOptions, target: PaddingOptions, t: number): void {
-        return this._helper.interpolatePadding(start, target, t);
+        this._helper.interpolatePadding(start, target, t);
     }
     isPaddingEqual(padding: PaddingOptions): boolean {
         return this._helper.isPaddingEqual(padding);
@@ -128,8 +128,8 @@ export class VerticalPerspectiveTransform implements ITransform {
     setMaxBounds(bounds?: LngLatBounds): void {
         this._helper.setMaxBounds(bounds);
     }
-    setConstrain(constrain?: TransformConstrainFunction | null): void {
-        this._helper.setConstrain(constrain);
+    setConstrainOverride(constrain?: TransformConstrainFunction | null): void {
+        this._helper.setConstrainOverride(constrain);
     }
     overrideNearFarZ(nearZ: number, farZ: number): void {
         this._helper.overrideNearFarZ(nearZ, farZ);
@@ -222,17 +222,17 @@ export class VerticalPerspectiveTransform implements ITransform {
     get renderWorldCopies(): boolean {
         return this._helper.renderWorldCopies;
     }
-    get constrain(): TransformConstrainFunction {
-        return this._helper.constrain;
+    get constrainOverride(): TransformConstrainFunction {
+        return this._helper.constrainOverride;
     }
-    public get nearZ(): number { 
-        return this._helper.nearZ; 
+    public get nearZ(): number {
+        return this._helper.nearZ;
     }
-    public get farZ(): number { 
-        return this._helper.farZ; 
+    public get farZ(): number {
+        return this._helper.farZ;
     }
-    public get autoCalculateNearFarZ(): boolean { 
-        return this._helper.autoCalculateNearFarZ; 
+    public get autoCalculateNearFarZ(): boolean {
+        return this._helper.autoCalculateNearFarZ;
     }
     setTransitionState(_value: number): void {
         // Do nothing
@@ -260,21 +260,21 @@ export class VerticalPerspectiveTransform implements ITransform {
 
     public constructor(options?: TransformOptions) {
         this._helper = new TransformHelper({
-            calcMatrices: () => { this._calcMatrices(); },
-            constrain: (center, zoom) => { return this.defaultConstrain(center, zoom); }
+            calcMatrices: () => this._calcMatrices(),
+            defaultConstrain: (center, zoom) => { return this.defaultConstrain(center, zoom); }
         }, options);
         this._coveringTilesDetailsProvider = new GlobeCoveringTilesDetailsProvider();
     }
 
     clone(): ITransform {
         const clone = new VerticalPerspectiveTransform();
-        clone.apply(this);
+        clone.apply(this, false);
         return clone;
     }
 
-    public apply(that: IReadonlyTransform, globeLatitudeErrorCorrectionRadians?: number): void {
+    public apply(that: IReadonlyTransform, constrain: boolean, globeLatitudeErrorCorrectionRadians?: number): void {
         this._globeLatitudeErrorCorrectionRadians = globeLatitudeErrorCorrectionRadians || 0;
-        this._helper.apply(that);
+        this._helper.apply(that, constrain);
     }
 
     public get projectionMatrix(): mat4 { return this._projectionMatrix; }
@@ -654,6 +654,10 @@ export class VerticalPerspectiveTransform implements ITransform {
             ),
             zoom: constrainedZoom
         };
+    };
+
+    applyConstrain: TransformConstrainFunction = (lngLat, zoom) => {
+        return this._helper.applyConstrain(lngLat, zoom);
     };
 
     calculateCenterFromCameraLngLatAlt(lngLat: LngLatLike, alt: number, bearing?: number, pitch?: number): {center: LngLat; elevation: number; zoom: number} {

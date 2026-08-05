@@ -1,4 +1,4 @@
-import {extend, wrap, defaultEasing, pick, scaleZoom} from '../util/util';
+import {extend, wrap, defaultEasing, pick, scaleZoom, evaluateZoomSnap} from '../util/util';
 import {interpolates} from '@maplibre/maplibre-gl-style-spec';
 import {browser} from '../util/browser';
 import {now} from '../util/time_control';
@@ -267,6 +267,7 @@ export abstract class Camera extends Evented {
     _padding: boolean;
 
     _bearingSnap: number;
+    _zoomSnap: number;
     _easeStart: number;
     _easeOptions: {
         duration?: number;
@@ -326,12 +327,14 @@ export abstract class Camera extends Evented {
 
     constructor(transform: ITransform, cameraHelper: ICameraHelper, options: {
         bearingSnap: number;
+        zoomSnap: number;
     }) {
         super();
         this._moving = false;
         this._zooming = false;
         this.transform = transform;
         this._bearingSnap = options.bearingSnap;
+        this._zoomSnap = options.zoomSnap;
         this.cameraHelper = cameraHelper;
 
         this.on('moveend', () => {
@@ -346,7 +349,7 @@ export abstract class Camera extends Evented {
      * When the style's projection is changed (or first set), this function should be called.
      */
     migrateProjection(newTransform: ITransform, newCameraHelper: ICameraHelper) {
-        newTransform.apply(this.transform);
+        newTransform.apply(this.transform, true);
         this.transform = newTransform;
         this.cameraHelper = newCameraHelper;
     }
@@ -515,7 +518,7 @@ export abstract class Camera extends Evented {
     }
 
     /**
-     * Increases the map's zoom level by 1.
+     * Incrementally increases the map's zoom level by 1, first snapping to the nearest `zoomSnap` increment.
      *
      * Triggers the following events: `movestart`, `move`, `moveend`, `zoomstart`, `zoom`, and `zoomend`.
      *
@@ -528,12 +531,12 @@ export abstract class Camera extends Evented {
      * ```
      */
     zoomIn(options?: AnimationOptions, eventData?: any): this {
-        this.zoomTo(this.getZoom() + 1, options, eventData);
+        this.zoomTo(evaluateZoomSnap(this.getZoom() + 1, this._zoomSnap), options, eventData);
         return this;
     }
 
     /**
-     * Decreases the map's zoom level by 1.
+     * Decreases the map's zoom level by 1, first snapping to the nearest `zoomSnap` increment.
      *
      * Triggers the following events: `movestart`, `move`, `moveend`, `zoomstart`, `zoom`, and `zoomend`.
      *
@@ -546,7 +549,7 @@ export abstract class Camera extends Evented {
      * ```
      */
     zoomOut(options?: AnimationOptions, eventData?: any): this {
-        this.zoomTo(this.getZoom() - 1, options, eventData);
+        this.zoomTo(evaluateZoomSnap(this.getZoom() - 1, this._zoomSnap), options, eventData);
         return this;
     }
 
@@ -594,6 +597,25 @@ export abstract class Camera extends Evented {
      * @see [Navigate the map with game-like controls](https://maplibre.org/maplibre-gl-js/docs/examples/navigate-the-map-with-game-like-controls/)
      */
     getBearing(): number { return this.transform.bearing; }
+
+    /**
+     * Sets the map's zoom snap level.
+     *
+     * @param snap - The zoom snap level to set.
+     */
+    setZoomSnap(snap: number): this {
+        this._zoomSnap = snap;
+        return this;
+    }
+
+    /**
+     * Returns the map's current zoom snap level.
+     *
+     * @returns The map's current zoom snap level.
+     */
+    getZoomSnap(): number {
+        return this._zoomSnap;
+    }
 
     /**
      * Sets the map's bearing (rotation). The bearing is the compass direction that is "up"; for example, a bearing
@@ -764,7 +786,7 @@ export abstract class Camera extends Evented {
      */
     cameraForBounds(bounds: LngLatBoundsLike, options?: CameraForBoundsOptions): CenterZoomBearing | undefined {
         bounds = LngLatBounds.convert(bounds).adjustAntiMeridian();
-        const bearing = options && options.bearing || 0;
+        const bearing = options?.bearing || 0;
 
         return this._cameraForBoxAndBearing(bounds.getNorthWest(), bounds.getSouthEast(), bearing, options);
     }
@@ -818,7 +840,11 @@ export abstract class Camera extends Evented {
         const tr = this.transform;
         const bounds = new LngLatBounds(p0, p1);
 
-        return this.cameraHelper.cameraForBoxAndBearing(options, padding, bounds, bearing, tr);
+        const result = this.cameraHelper.cameraForBoxAndBearing(options, padding, bounds, bearing, tr);
+        if (result && this._zoomSnap) {
+            result.zoom = evaluateZoomSnap(result.zoom, this._zoomSnap, -1);
+        }
+        return result;
     }
 
     /**
@@ -922,13 +948,19 @@ export abstract class Camera extends Evented {
     jumpTo(options: JumpToOptions, eventData?: any): this {
         this.stop();
 
+        if ('zoom' in options && this._zoomSnap) {
+            options.zoom = evaluateZoomSnap(options.zoom, this._zoomSnap);
+        }
+
         const tr = this._getTransformForUpdate();
         let bearingChanged = false,
             pitchChanged = false;
         let rollChanged = false;
 
         const oldZoom = tr.zoom;
-
+        if (this.terrain) {
+            tr.setElevation(this.terrain.getElevationForLngLatZoom(options.center ? LngLat.convert(options.center) : tr.center, options.zoom || tr.tileZoom));
+        }
         this.cameraHelper.handleJumpToCenterZoom(tr, options);
 
         const zoomChanged = tr.zoom !== oldZoom;
@@ -1092,6 +1124,10 @@ export abstract class Camera extends Evented {
             easing: defaultEasing
         }, options);
 
+        if ('zoom' in options && this._zoomSnap) {
+            options.zoom = evaluateZoomSnap(options.zoom, this._zoomSnap);
+        }
+
         if (options.animate === false || (!options.essential && browser.prefersReducedMotion)) {
             options.duration = 0;
         }
@@ -1134,11 +1170,11 @@ export abstract class Camera extends Evented {
             center: options.center,
         });
 
-        this._rotating = this._rotating || (startBearing !== bearing);
-        this._pitching = this._pitching || (pitch !== startPitch);
-        this._rolling = this._rolling || (roll !== startRoll);
+        this._rotating ||= (startBearing !== bearing);
+        this._pitching ||= (pitch !== startPitch);
+        this._rolling ||= (roll !== startRoll);
         this._padding = !tr.isPaddingEqual(padding);
-        this._zooming = this._zooming || easeHandler.isZooming;
+        this._zooming ||= easeHandler.isZooming;
         this._easeId = options.easeId;
         this._prepareEase(eventData, options.noMoveStart, currently);
 
@@ -1225,9 +1261,7 @@ export abstract class Camera extends Evented {
     _getTransformForUpdate(): ITransform {
         if (!this.transformCameraUpdate && !this.terrain) return this.transform;
 
-        if (!this._requestedCameraState) {
-            this._requestedCameraState = this.transform.clone();
-        }
+        this._requestedCameraState ||= this.transform.clone();
         return this._requestedCameraState;
     }
 
@@ -1268,7 +1302,7 @@ export abstract class Camera extends Evented {
      * Call `transformCameraUpdate` if present, and then apply the "approved" changes.
      */
     _applyUpdatedTransform(tr: ITransform) {
-        const modifiers : ((tr: ITransform) => ReturnType<CameraUpdateTransformFunction>)[] = [];
+        const modifiers : Array<(tr: ITransform) => ReturnType<CameraUpdateTransformFunction>> = [];
         modifiers.push(tr => this._elevateCameraIfInsideTerrain(tr));
         if (this.transformCameraUpdate) {
             modifiers.push(tr => this.transformCameraUpdate(tr));
@@ -1293,9 +1327,9 @@ export abstract class Camera extends Evented {
             if (roll !== undefined) nextTransform.setRoll(roll);
             if (pitch !== undefined) nextTransform.setPitch(pitch);
             if (bearing !== undefined) nextTransform.setBearing(bearing);
-            finalTransform.apply(nextTransform);
+            finalTransform.apply(nextTransform, false);
         }
-        this.transform.apply(finalTransform);
+        this.transform.apply(finalTransform, false);
     }
 
     _fireMoveEvents(eventData?: any) {
@@ -1408,6 +1442,10 @@ export abstract class Camera extends Evented {
             easing: defaultEasing
         }, options);
 
+        if ('zoom' in options && this._zoomSnap) {
+            options.zoom = evaluateZoomSnap(options.zoom, this._zoomSnap);
+        }
+
         const tr = this._getTransformForUpdate(),
             startBearing = tr.bearing,
             startPitch = tr.pitch,
@@ -1514,7 +1552,7 @@ export abstract class Camera extends Evented {
         this._rotating = (startBearing !== bearing);
         this._pitching = (pitch !== startPitch);
         this._rolling = (roll !== startRoll);
-        this._padding = !tr.isPaddingEqual(padding as PaddingOptions);
+        this._padding = !tr.isPaddingEqual(padding);
 
         this._prepareEase(eventData, false);
         if (this.terrain) this._prepareElevation(flyToHandler.targetCenter);
@@ -1534,7 +1572,7 @@ export abstract class Camera extends Evented {
                 tr.setRoll(interpolates.number(startRoll, roll, k));
             }
             if (this._padding) {
-                tr.interpolatePadding(startPadding, padding as PaddingOptions, k);
+                tr.interpolatePadding(startPadding, padding, k);
                 // When padding is being applied, Transform.centerPoint is changing continuously,
                 // thus we need to recalculate offsetPoint every frame
                 pointAtOffset = tr.centerPoint.add(offsetAsPoint);
@@ -1638,6 +1676,6 @@ export abstract class Camera extends Evented {
         if (!this.terrain) {
             return null;
         }
-        return this.terrain.getElevationForLngLatZoom(LngLat.convert(lngLatLike), this.transform.tileZoom);
+        return this.terrain.getElevationForLngLat(LngLat.convert(lngLatLike), this.transform);
     }
 }

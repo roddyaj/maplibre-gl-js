@@ -12,6 +12,7 @@ import {EXTENT} from '../../data/extent';
 import {TransformHelper} from '../transform_helper';
 import {MercatorCoveringTilesDetailsProvider} from './mercator_covering_tiles_details_provider';
 import {Frustum} from '../../util/primitives/frustum';
+import {fastInvertProjMat4} from '../../util/fast_maths';
 
 import type {Terrain} from '../../render/terrain';
 import type {IReadonlyTransform, ITransform, TransformConstrainFunction} from '../transform_interface';
@@ -94,7 +95,7 @@ export class MercatorTransform implements ITransform {
         this._helper.setPadding(padding);
     }
     interpolatePadding(start: PaddingOptions, target: PaddingOptions, t: number): void {
-        return this._helper.interpolatePadding(start, target, t);
+        this._helper.interpolatePadding(start, target, t);
     }
     isPaddingEqual(padding: PaddingOptions): boolean {
         return this._helper.isPaddingEqual(padding);
@@ -108,8 +109,8 @@ export class MercatorTransform implements ITransform {
     setMaxBounds(bounds?: LngLatBounds): void {
         this._helper.setMaxBounds(bounds);
     }
-    setConstrain(constrain?: TransformConstrainFunction | null): void {
-        this._helper.setConstrain(constrain);
+    setConstrainOverride(constrain?: TransformConstrainFunction | null): void {
+        this._helper.setConstrainOverride(constrain);
     }
     overrideNearFarZ(nearZ: number, farZ: number): void {
         this._helper.overrideNearFarZ(nearZ, farZ);
@@ -202,20 +203,20 @@ export class MercatorTransform implements ITransform {
     get renderWorldCopies(): boolean {
         return this._helper.renderWorldCopies;
     }
-    get cameraToCenterDistance(): number { 
+    get cameraToCenterDistance(): number {
         return this._helper.cameraToCenterDistance;
     }
-    get constrain(): TransformConstrainFunction {
-        return this._helper.constrain;
+    get constrainOverride(): TransformConstrainFunction {
+        return this._helper.constrainOverride;
     }
-    public get nearZ(): number { 
-        return this._helper.nearZ; 
+    public get nearZ(): number {
+        return this._helper.nearZ;
     }
-    public get farZ(): number { 
-        return this._helper.farZ; 
+    public get farZ(): number {
+        return this._helper.farZ;
     }
-    public get autoCalculateNearFarZ(): boolean { 
-        return this._helper.autoCalculateNearFarZ; 
+    public get autoCalculateNearFarZ(): boolean {
+        return this._helper.autoCalculateNearFarZ;
     }
     setTransitionState(_value: number, _error: number): void {
         // Do nothing
@@ -245,19 +246,19 @@ export class MercatorTransform implements ITransform {
 
     constructor(options?: TransformOptions) {
         this._helper = new TransformHelper({
-            calcMatrices: () => { this._calcMatrices(); },
-            constrain: (center, zoom) => { return this.defaultConstrain(center, zoom); }
+            calcMatrices: () => this._calcMatrices(),
+            defaultConstrain: (center, zoom) => { return this.defaultConstrain(center, zoom); }
         }, options);
         this._coveringTilesDetailsProvider = new MercatorCoveringTilesDetailsProvider();
     }
 
     public clone(): ITransform {
         const clone = new MercatorTransform();
-        clone.apply(this);
+        clone.apply(this, false);
         return clone;
     }
 
-    public apply(that: IReadonlyTransform, constrain?: boolean, forceOverrideZ?: boolean): void {
+    public apply(that: IReadonlyTransform, constrain: boolean, forceOverrideZ?: boolean): void {
         this._helper.apply(that, constrain, forceOverrideZ);
     }
 
@@ -267,7 +268,7 @@ export class MercatorTransform implements ITransform {
     public get inverseProjectionMatrix(): mat4 { return this._invProjMatrix; }
     public get mercatorMatrix(): mat4 { return this._mercatorMatrix; } // Not part of ITransform interface
 
-    getVisibleUnwrappedCoordinates(tileID: CanonicalTileID): Array<UnwrappedTileID> {
+    getVisibleUnwrappedCoordinates(tileID: CanonicalTileID): UnwrappedTileID[] {
         const result = [new UnwrappedTileID(0, tileID)];
         if (this._helper._renderWorldCopies) {
             const utl = this.screenPointToMercatorCoordinate(new Point(0, 0));
@@ -323,7 +324,7 @@ export class MercatorTransform implements ITransform {
 
     locationToScreenPoint(lnglat: LngLat, terrain?: Terrain): Point {
         return terrain ?
-            this.coordinatePoint(MercatorCoordinate.fromLngLat(lnglat), terrain.getElevationForLngLatZoom(lnglat, this._helper._tileZoom), this._pixelMatrix3D) :
+            this.coordinatePoint(MercatorCoordinate.fromLngLat(lnglat), terrain.getElevationForLngLat(lnglat, this), this._pixelMatrix3D) :
             this.coordinatePoint(MercatorCoordinate.fromLngLat(lnglat));
     }
 
@@ -542,6 +543,10 @@ export class MercatorTransform implements ITransform {
         return result;
     };
 
+    applyConstrain: TransformConstrainFunction = (lngLat, zoom) => {
+        return this._helper.applyConstrain(lngLat, zoom);
+    };
+
     calculateCenterFromCameraLngLatAlt(lnglat: LngLatLike, alt: number, bearing?: number, pitch?: number): {center: LngLat; elevation: number; zoom: number} {
         return this._helper.calculateCenterFromCameraLngLatAlt(lnglat, alt, bearing, pitch);
     }
@@ -607,7 +612,7 @@ export class MercatorTransform implements ITransform {
         m = new Float64Array(16) as any;
         mat4.perspective(m, this.fovInRadians, this._helper._width / this._helper._height, this._helper._nearZ, this._helper._farZ);
         this._invProjMatrix = new Float64Array(16) as any as mat4;
-        mat4.invert(this._invProjMatrix, m);
+        fastInvertProjMat4(this._invProjMatrix, m);
 
         // Apply center of perspective offset
         m[8] = -offset.x * 2 / this._helper._width;
@@ -726,9 +731,9 @@ export class MercatorTransform implements ITransform {
         const {overscaledTileID, aligned, applyTerrainMatrix} = params;
         const mercatorTileCoordinates = this._helper.getMercatorTileCoordinates(overscaledTileID);
         const tilePosMatrix = overscaledTileID ? this.calculatePosMatrix(overscaledTileID, aligned, true) : null;
-        
+
         let mainMatrix: mat4;
-        if (overscaledTileID && overscaledTileID.terrainRttPosMatrix32f && applyTerrainMatrix) {
+        if (overscaledTileID?.terrainRttPosMatrix32f && applyTerrainMatrix) {
             mainMatrix = overscaledTileID.terrainRttPosMatrix32f;
         } else if (tilePosMatrix) {
             mainMatrix = tilePosMatrix; // This matrix should be float32
@@ -786,7 +791,7 @@ export class MercatorTransform implements ITransform {
         };
     }
 
-    populateCache(coords: Array<OverscaledTileID>): void {
+    populateCache(coords: OverscaledTileID[]): void {
         for (const coord of coords) {
             // Return value is thrown away, but this function will still
             // place the pos matrix into the transform's internal cache.

@@ -1,19 +1,19 @@
 import {uniqueId, parseCacheControl} from '../util/util';
 import {deserialize as deserializeBucket} from '../data/bucket';
-import '../data/feature_index';
+import {GEOJSON_TILE_LAYER_NAME, type FeatureIndex, type QueryResults} from '../data/feature_index';
 import {GeoJSONFeature} from '../util/vectortile_to_geojson';
 import {featureFilter} from '@maplibre/maplibre-gl-style-spec';
 import {SymbolBucket} from '../data/bucket/symbol_bucket';
 import {CollisionBoxArray} from '../data/array_types.g';
-import {Texture} from '../render/texture';
+import {Texture} from '../webgl/texture';
 import {now} from '../util/time_control';
 import {toEvaluationFeature} from '../data/evaluation_feature';
 import {EvaluationParameters} from '../style/evaluation_parameters';
-import {type SourceFeatureState} from '../source/source_state';
 import {rtlMainThreadPluginFactory} from '../source/rtl_text_plugin_main_thread';
 
 const CLOCK_SKEW_RETRY_TIMEOUT = 30000;
 
+import type {SourceFeatureState} from '../source/source_state';
 import type {Bucket} from '../data/bucket';
 import type {StyleLayer} from '../style/style_layer';
 import type {WorkerTileResult} from '../source/worker_source';
@@ -22,18 +22,18 @@ import type {DEMData} from '../data/dem_data';
 import type {AlphaImage} from '../util/image';
 import type {ImageAtlas} from '../render/image_atlas';
 import type {ImageManager} from '../render/image_manager';
-import type {Context} from '../gl/context';
+import type {Context} from '../webgl/context';
 import type {OverscaledTileID} from './tile_id';
-import type {Framebuffer} from '../gl/framebuffer';
+import type {Framebuffer} from '../webgl/framebuffer';
 import type {IReadonlyTransform} from '../geo/transform_interface';
 import type {LayerFeatureStates} from '../source/source_state';
 import type Point from '@mapbox/point-geometry';
 import type {mat4} from 'gl-matrix';
-import type {VectorTileLayer} from '@mapbox/vector-tile';
 import type {ExpiryData} from '../util/ajax';
 import type {QueryRenderedFeaturesOptionsStrict, QuerySourceFeatureOptionsStrict} from '../source/query_features';
-import type {FeatureIndex, QueryResults} from '../data/feature_index';
 import type {DashEntry} from '../render/line_atlas';
+import type {VectorTileLayerLike} from '@maplibre/vt-pbf';
+import type {Painter} from '../render/painter';
 /**
  * The tile's state, can be:
  *
@@ -71,13 +71,15 @@ export class Tile {
     uses: number;
     tileSize: number;
     buckets: {[_: string]: Bucket};
-    latestFeatureIndex: FeatureIndex;
+    latestFeatureIndex: FeatureIndex | null;
     latestRawTileData: ArrayBuffer;
+    latestEncoding: string;
     imageAtlas: ImageAtlas;
     imageAtlasTexture: Texture;
     dashPositions: {[_: string]: DashEntry};
     glyphAtlasImage: AlphaImage;
     glyphAtlasTexture: Texture;
+    etag?: string;
     expirationTime: any;
     expiredRequestCount: number;
     state: TileState;
@@ -93,9 +95,9 @@ export class Tile {
     showCollisionBoxes: boolean;
     placementSource: any;
     actor: Actor;
-    vtLayers: {[_: string]: VectorTileLayer};
+    vtLayers: {[_: string]: VectorTileLayerLike};
 
-    neighboringTiles: any;
+    neighboringTiles: Record<string, {backfilled: boolean}>;
     dem: DEMData;
     demMatrix: mat4;
     aborted: boolean;
@@ -107,7 +109,7 @@ export class Tile {
     demTexture: Texture;
     refreshedUponExpiration: boolean;
     reloadPromise: {resolve: () => void; reject: () => void};
-    resourceTiming: Array<PerformanceResourceTiming>;
+    resourceTiming: PerformanceResourceTiming[];
     queryPadding: number;
 
     symbolFadeHoldUntil: number;
@@ -115,7 +117,7 @@ export class Tile {
     hasRTLText: boolean;
     dependencies: any;
     rtt: Array<{id: number; stamp: number}>;
-    rttCoords: {[_:string]: string};
+    rttFingerprint: {[sourceId:string]: string};
 
     /**
      * @param tileID - the tile ID
@@ -133,7 +135,7 @@ export class Tile {
         this.hasRTLText = false;
         this.dependencies = {};
         this.rtt = [];
-        this.rttCoords = {};
+        this.rttFingerprint = {};
 
         // Counts the number of times a response was already expired when
         // received. We're using this to add a delay when making a new request
@@ -203,7 +205,12 @@ export class Tile {
      * @param painter - the painter
      * @param justReloaded - `true` to just reload
      */
-    loadVectorData(data: WorkerTileResult, painter: any, justReloaded?: boolean | null) {
+    loadVectorData(data: WorkerTileResult, painter: Painter, justReloaded?: boolean | null) {
+        if (data?.etagUnmodified === true) {
+            this.state = 'loaded';
+            return;
+        }
+
         if (this.hasData()) {
             this.unloadVectorData();
         }
@@ -222,11 +229,14 @@ export class Tile {
                 // Only vector tiles have rawTileData, and they won't update it for
                 // 'reloadTile'
                 this.latestRawTileData = data.rawTileData;
+                this.latestEncoding = data.encoding;
                 this.latestFeatureIndex.rawTileData = data.rawTileData;
+                this.latestFeatureIndex.encoding = data.encoding;
             } else if (this.latestRawTileData) {
                 // If rawTileData hasn't updated, hold onto a pointer to the last
                 // one we received
                 this.latestFeatureIndex.rawTileData = this.latestRawTileData;
+                this.latestFeatureIndex.encoding = this.latestEncoding;
             }
         }
         this.collisionBoxArray = data.collisionBoxArray;
@@ -287,18 +297,12 @@ export class Tile {
             this.imageAtlasTexture.destroy();
         }
 
-        if (this.imageAtlas) {
-            this.imageAtlas = null;
-        }
-
         if (this.glyphAtlasTexture) {
             this.glyphAtlasTexture.destroy();
         }
-
-        if (this.dashPositions) {
-            this.dashPositions = null;
-        }
-
+        
+        this.imageAtlas = null;
+        this.dashPositions = null;
         this.latestFeatureIndex = null;
         this.state = 'unloaded';
     }
@@ -339,8 +343,8 @@ export class Tile {
         layers: {[_: string]: StyleLayer},
         serializedLayers: {[_: string]: any},
         sourceFeatureState: SourceFeatureState,
-        queryGeometry: Array<Point>,
-        cameraQueryGeometry: Array<Point>,
+        queryGeometry: Point[],
+        cameraQueryGeometry: Point[],
         scale: number,
         params: Pick<QueryRenderedFeaturesOptionsStrict, 'filter' | 'layers' | 'availableImages'> | undefined,
         transform: IReadonlyTransform,
@@ -348,7 +352,7 @@ export class Tile {
         pixelPosMatrix: mat4,
         getElevation: undefined | ((x: number, y: number) => number)
     ): QueryResults {
-        if (!this.latestFeatureIndex || !this.latestFeatureIndex.rawTileData)
+        if (!this.latestFeatureIndex?.rawTileData)
             return {};
 
         return this.latestFeatureIndex.query({
@@ -364,14 +368,14 @@ export class Tile {
         }, layers, serializedLayers, sourceFeatureState);
     }
 
-    querySourceFeatures(result: Array<GeoJSONFeature>, params?: QuerySourceFeatureOptionsStrict) {
+    querySourceFeatures(result: GeoJSONFeature[], params?: QuerySourceFeatureOptionsStrict) {
         const featureIndex = this.latestFeatureIndex;
-        if (!featureIndex || !featureIndex.rawTileData) return;
+        if (!featureIndex?.rawTileData) return;
 
         const vtLayers = featureIndex.loadVTLayers();
 
-        const sourceLayer = params && params.sourceLayer ? params.sourceLayer : '';
-        const layer = vtLayers._geojsonTileLayer || vtLayers[sourceLayer];
+        const sourceLayer = params?.sourceLayer ? params.sourceLayer : '';
+        const layer = vtLayers[GEOJSON_TILE_LAYER_NAME] || vtLayers[sourceLayer];
 
         if (!layer) return;
 
@@ -463,8 +467,7 @@ export class Tile {
     }
 
     setFeatureState(states: LayerFeatureStates, painter: any) {
-        if (!this.latestFeatureIndex ||
-            !this.latestFeatureIndex.rawTileData ||
+        if (!this.latestFeatureIndex?.rawTileData ||
             Object.keys(states).length === 0) {
             return;
         }
@@ -476,13 +479,13 @@ export class Tile {
 
             const bucket = this.buckets[id];
             // Buckets are grouped by common source-layer
-            const sourceLayerId = bucket.layers[0]['sourceLayer'] || '_geojsonTileLayer';
+            const sourceLayerId = bucket.layers[0]['sourceLayer'] || GEOJSON_TILE_LAYER_NAME;
             const sourceLayer = vtLayers[sourceLayerId];
             const sourceLayerStates = states[sourceLayerId];
             if (!sourceLayer || !sourceLayerStates || Object.keys(sourceLayerStates).length === 0) continue;
 
-            bucket.update(sourceLayerStates, sourceLayer, this.imageAtlas && this.imageAtlas.patternPositions || {}, this.dashPositions || {});
-            const layer = painter && painter.style && painter.style.getLayer(id);
+            bucket.update(sourceLayerStates, sourceLayer, this.imageAtlas?.patternPositions || {}, this.dashPositions || {});
+            const layer = painter?.style?.getLayer(id);
             if (layer) {
                 this.queryPadding = Math.max(this.queryPadding, layer.queryRadius(bucket));
             }
@@ -505,7 +508,7 @@ export class Tile {
         this.symbolFadeHoldUntil = now() + duration;
     }
 
-    setDependencies(namespace: string, dependencies: Array<string>) {
+    setDependencies(namespace: string, dependencies: string[]) {
         const index = {};
         for (const dep of dependencies) {
             index[dep] = true;
@@ -513,7 +516,7 @@ export class Tile {
         this.dependencies[namespace] = index;
     }
 
-    hasDependency(namespaces: Array<string>, keys: Array<string>) {
+    hasDependency(namespaces: string[], keys: string[]) {
         for (const namespace of namespaces) {
             const dependencies = this.dependencies[namespace];
             if (dependencies) {

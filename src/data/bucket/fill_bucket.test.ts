@@ -10,7 +10,7 @@ import {type ZoomHistory} from '../../style/zoom_history';
 import {type BucketFeature, type BucketParameters} from '../bucket';
 import {SubdivisionGranularitySetting} from '../../render/subdivision_granularity_settings';
 import {CanonicalTileID} from '../../tile/tile_id';
-import {type VectorTileLayer} from '@mapbox/vector-tile';
+import type {VectorTileLayerLike} from '@maplibre/vt-pbf';
 
 function createPolygon(numPoints) {
     const points = [];
@@ -28,13 +28,13 @@ function createFillBucket({id, layout, paint, globalState, availableImages}: Cre
         paint
     } as LayerSpecification, globalState);
     layer.recalculate({zoom: 0, zoomHistory: {} as ZoomHistory} as EvaluationParameters,
-        availableImages as Array<string>);
+        availableImages);
 
     return new FillBucket({layers: [layer]} as BucketParameters<FillStyleLayer>);
 }
 
 describe('FillBucket', () => {
-    let sourceLayer: VectorTileLayer;
+    let sourceLayer: VectorTileLayerLike;
     let canonicalTileID;
     beforeAll(() => {
         // Load fill features from fixture tile.

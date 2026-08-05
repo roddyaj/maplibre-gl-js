@@ -1,8 +1,7 @@
 import {type RequestParameters, makeRequest, sameOrigin, type GetResourceResponse} from './ajax';
-import {arrayBufferToImageBitmap, arrayBufferToImage, extend, isWorker, isImageBitmap} from './util';
-import {webpSupported} from './webp_supported';
+import {arrayBufferToImageBitmap, arrayBufferToImage, ensureError, extend, isWorker, isImageBitmap} from './util';
 import {config} from './config';
-import {createAbortError} from './abort_error';
+import {AbortError} from './abort_error';
 import {getProtocol} from '../source/protocol_crud';
 
 type ImageQueueThrottleControlCallback = () => boolean;
@@ -106,12 +105,8 @@ export namespace ImageRequest {
      */
     export const getImage = (requestParameters: RequestParameters, abortController: AbortController, supportImageRefresh: boolean = true): Promise<GetResourceResponse<HTMLImageElement | ImageBitmap | null>> => {
         return new Promise<GetResourceResponse<HTMLImageElement | ImageBitmap | null>>((resolve, reject) => {
-            if (webpSupported.supported) {
-                if (!requestParameters.headers) {
-                    requestParameters.headers = {};
-                }
-                requestParameters.headers.accept = 'image/webp,*/*';
-            }
+            requestParameters.headers ||= {};
+            requestParameters.headers.accept = 'image/webp,*/*';
             extend(requestParameters, {type: 'image'});
             const request: ImageRequestQueueItem = {
                 abortController,
@@ -178,7 +173,7 @@ export namespace ImageRequest {
             }
         } catch (err) {
             delete itemInQueue.abortController;
-            onError(err);
+            onError(ensureError(err));
         } finally {
             currentParallelImageRequests--;
             processQueue();
@@ -223,7 +218,7 @@ export namespace ImageRequest {
             abortController.signal.addEventListener('abort', () => {
                 // Set src to '' to actually cancel the request
                 image.src = '';
-                reject(createAbortError());
+                reject(new AbortError(abortController.signal.reason));
             });
 
             image.fetchPriority = 'high';

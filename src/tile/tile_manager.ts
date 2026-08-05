@@ -1,18 +1,25 @@
 import {create as createSource} from '../source/source';
 
-import {Tile, FadingDirections, FadingRoles} from './tile';
+import {Tile} from './tile';
 import {ErrorEvent, Event, Evented} from '../util/evented';
+import {ensureError} from '../util/util';
 import {TileCache} from './tile_cache';
 import {MercatorCoordinate} from '../geo/mercator_coordinate';
 import {EXTENT} from '../data/extent';
-import {type Context} from '../gl/context';
-import Point from '@mapbox/point-geometry';
+import type Point from '@mapbox/point-geometry';
 import {now} from '../util/time_control';
 import {OverscaledTileID} from './tile_id';
 import {SourceFeatureState} from '../source/source_state';
-import {getEdgeTiles} from '../util/util';
 import {config} from '../util/config';
+import {coveringTiles, coveringZoomLevel} from '../geo/projection/covering_tiles';
+import {Bounds} from '../geo/bounds';
+import {EXTENT_BOUNDS} from '../data/extent_bounds';
+import {GEOJSON_TILE_LAYER_NAME} from '../data/feature_index';
+import {hasRasterTransition, isRasterType, updateFadingTiles} from './tile_manager_raster';
+import {backfillDEM} from './tile_manager_raster_dem';
+import {InViewTiles} from './tile_manager_in_view_tiles';
 
+import type {Context} from '../webgl/context';
 import type {Source} from '../source/source';
 import type {Map} from '../ui/map';
 import type {Style} from '../style/style';
@@ -23,15 +30,13 @@ import type {ICanonicalTileID, SourceSpecification} from '@maplibre/maplibre-gl-
 import type {MapSourceDataEvent} from '../ui/events';
 import type {Terrain} from '../render/terrain';
 import type {CanvasSourceSpecification} from '../source/canvas_source';
-import {coveringTiles, coveringZoomLevel} from '../geo/projection/covering_tiles';
-import {Bounds} from '../geo/bounds';
-import {EXTENT_BOUNDS} from '../data/extent_bounds';
+import type {LoadTileResult} from '../source/vector_tile_source';
 
 type TileResult = {
     tile: Tile;
     tileID: OverscaledTileID;
-    queryGeometry: Array<Point>;
-    cameraQueryGeometry: Array<Point>;
+    queryGeometry: Point[];
+    cameraQueryGeometry: Point[];
     scale: number;
 };
 
@@ -68,9 +73,9 @@ export class TileManager extends Evented {
     _sourceLoaded: boolean;
 
     _sourceErrored: boolean;
-    _tiles: Record<string, Tile>;
+    _inViewTiles: InViewTiles;
     _prevLng: number;
-    _cache: TileCache;
+    _outOfViewCache: TileCache;
     _timers: Record<string, ReturnType<typeof setTimeout>>;
     _maxTileCacheSize: number;
     _maxTileCacheZoomLevels: number;
@@ -87,15 +92,15 @@ export class TileManager extends Evented {
     _rasterFadeDuration: number;
     _maxFadingAncestorLevels: number;
 
-    static maxUnderzooming: number;
-    static maxOverzooming: number;
+    static maxUnderzooming: number = 10;
+    static maxOverzooming: number = 3;
 
     constructor(id: string, options: SourceSpecification | CanvasSourceSpecification, dispatcher: Dispatcher) {
         super();
         this.id = id;
         this.dispatcher = dispatcher;
 
-        this.on('data', (e: MapSourceDataEvent) => this._dataHandler(e));
+        this.on('data', (e: MapSourceDataEvent) => { this._dataHandler(e); });
 
         this.on('dataloading', () => {
             this._sourceErrored = false;
@@ -108,8 +113,8 @@ export class TileManager extends Evented {
 
         this._source = createSource(id, options, dispatcher, this);
 
-        this._tiles = {};
-        this._cache = new TileCache(0, (tile) => this._unloadTile(tile));
+        this._inViewTiles = new InViewTiles();
+        this._outOfViewCache = new TileCache(0, (tile) => this._unloadTile(tile));
         this._timers = {};
         this._maxTileCacheSize = null;
         this._maxTileCacheZoomLevels = null;
@@ -125,16 +130,20 @@ export class TileManager extends Evented {
         this.map = map;
         this._maxTileCacheSize = map ? map._maxTileCacheSize : null;
         this._maxTileCacheZoomLevels = map ? map._maxTileCacheZoomLevels : null;
-        if (this._source && this._source.onAdd) {
+        if (this._source?.onAdd) {
             this._source.onAdd(map);
         }
     }
 
     onRemove(map: Map) {
+        for (const tile of this._inViewTiles.getAllTiles()) {
+            tile.unloadVectorData();
+        }
         this.clearTiles();
-        if (this._source && this._source.onRemove) {
+        if (this._source?.onRemove) {
             this._source.onRemove(map);
         }
+        this._inViewTiles = new InViewTiles();
     }
 
     /**
@@ -149,8 +158,7 @@ export class TileManager extends Evented {
         // do not consider as loaded if the update hasn't been called yet (we do not know if we will have any tiles to fetch)
         if (!this._updated) { return false; }
 
-        for (const t in this._tiles) {
-            const tile = this._tiles[t];
+        for (const tile of this._inViewTiles.getAllTiles()) {
             if (tile.state !== 'loaded' && tile.state !== 'errored')
                 return false;
         }
@@ -180,12 +188,13 @@ export class TileManager extends Evented {
 
     async _loadTile(tile: Tile, id: string, state: TileState): Promise<void> {
         try {
-            await this._source.loadTile(tile);
-            this._tileLoaded(tile, id, state);
+            const result = await this._source.loadTile(tile) as LoadTileResult;
+            this._tileLoaded(tile, id, state, result);
         } catch (err) {
             tile.state = 'errored';
-            if ((err as any).status !== 404) {
-                this._source.fire(new ErrorEvent(err, {tile}));
+
+            if (err.status !== 404) {
+                this._source.fire(new ErrorEvent(ensureError(err), {tile}));
             } else {
                 // continue to try loading parent/children tiles if a tile doesn't exist (404)
                 this.update(this.transform, this.terrain);
@@ -214,9 +223,8 @@ export class TileManager extends Evented {
             this._source.prepare();
         }
 
-        this._state.coalesceChanges(this._tiles, this.map ? this.map.painter : null);
-        for (const i in this._tiles) {
-            const tile = this._tiles[i];
+        this._state.coalesceChanges(this._inViewTiles, this.map ? this.map.painter : null);
+        for (const tile of this._inViewTiles.getAllTiles()) {
             tile.upload(context);
             tile.prepare(this.map.style.imageManager);
         }
@@ -225,25 +233,12 @@ export class TileManager extends Evented {
     /**
      * Return all tile ids ordered with z-order, and cast to numbers
      */
-    getIds(): Array<string> {
-        return Object.values(this._tiles).map(tile => tile.tileID).sort(compareTileId).map(id => id.key);
+    getIds(): string[] {
+        return this._inViewTiles.getAllIds(true);
     }
 
-    getRenderableIds(symbolLayer?: boolean): Array<string> {
-        const renderables: Array<Tile> = [];
-        for (const id in this._tiles) {
-            if (this._isIdRenderable(id, symbolLayer)) renderables.push(this._tiles[id]);
-        }
-        if (symbolLayer) {
-            return renderables.sort((a_: Tile, b_: Tile) => {
-                const a = a_.tileID;
-                const b = b_.tileID;
-                const rotatedA = (new Point(a.canonical.x, a.canonical.y))._rotate(-this.transform.bearingInRadians);
-                const rotatedB = (new Point(b.canonical.x, b.canonical.y))._rotate(-this.transform.bearingInRadians);
-                return a.overscaledZ - b.overscaledZ || rotatedB.y - rotatedA.y || rotatedB.x - rotatedA.x;
-            }).map(tile => tile.tileID.key);
-        }
-        return renderables.map(tile => tile.tileID).sort(compareTileId).map(id => id.key);
+    getRenderableIds(symbolLayer?: boolean): string[] {
+        return this._inViewTiles.getRenderableIds(this.transform?.bearingInRadians, symbolLayer);
     }
 
     hasRenderableParent(tileID: OverscaledTileID) {
@@ -251,14 +246,10 @@ export class TileManager extends Evented {
         if (parentZ >= this._source.minzoom) {
             const parentTile = this.getLoadedTile(tileID.scaledTo(parentZ));
             if (parentTile) {
-                return this._isIdRenderable(parentTile.tileID.key);
+                return this._inViewTiles.isIdRenderable(parentTile.tileID.key);
             }
         }
         return false;
-    }
-
-    _isIdRenderable(id: string, symbolLayer: boolean = false) {
-        return this._tiles[id]?.isRenderable(symbolLayer);
     }
 
     /**
@@ -275,21 +266,22 @@ export class TileManager extends Evented {
             return;
         }
 
-        this._cache.reset();
+        this._outOfViewCache.reset();
 
-        for (const i in this._tiles) {
-            if (shouldReloadTileOptions && this._source.shouldReloadTile && !this._source.shouldReloadTile(this._tiles[i], shouldReloadTileOptions)) {
+        for (const id of this._inViewTiles.getAllIds()) {
+            const tile = this._inViewTiles.getTileById(id);
+            if (shouldReloadTileOptions && !this._source.shouldReloadTile(tile, shouldReloadTileOptions)) {
                 continue;
             } else if (sourceDataChanged) {
-                this._reloadTile(i, 'expired');
-            } else if (this._tiles[i].state !== 'errored') {
-                this._reloadTile(i, 'reloading');
+                this._reloadTile(id, 'expired');
+            } else if (tile.state !== 'errored') {
+                this._reloadTile(id, 'reloading');
             }
         }
     }
 
     async _reloadTile(id: string, state: TileState) {
-        const tile = this._tiles[id];
+        const tile = this._inViewTiles.getTileById(id);
 
         // this potentially does not address all underlying
         // issues https://github.com/mapbox/mapbox-gl-js/issues/4252
@@ -306,7 +298,7 @@ export class TileManager extends Evented {
         await this._loadTile(tile, id, state);
     }
 
-    _tileLoaded(tile: Tile, id: string, previousState: TileState) {
+    _tileLoaded(tile: Tile, id: string, previousState: TileState, result: LoadTileResult) {
         tile.timeAdded = now();
         // Since self-fading applies to unloaded tiles, fadeEndTime must be updated upon load
         if (tile.selfFading) {
@@ -315,52 +307,16 @@ export class TileManager extends Evented {
 
         if (previousState === 'expired') tile.refreshedUponExpiration = true;
         this._setTileReloadTimer(id, tile);
-        if (this.getSource().type === 'raster-dem' && tile.dem) this._backfillDEM(tile);
+
+        if (result?.unmodified) return;
+
+        if (this.getSource().type === 'raster-dem' && tile.dem) {
+            backfillDEM(tile, this._inViewTiles);
+        }
         this._state.initializeTileState(tile, this.map ? this.map.painter : null);
 
         if (!tile.aborted) {
             this._source.fire(new Event('data', {dataType: 'source', tile, coord: tile.tileID}));
-        }
-    }
-
-    /**
-     * For raster terrain source, backfill DEM to eliminate visible tile boundaries
-     */
-    _backfillDEM(tile: Tile) {
-        const renderables = this.getRenderableIds();
-        for (let i = 0; i < renderables.length; i++) {
-            const borderId = renderables[i];
-            if (tile.neighboringTiles && tile.neighboringTiles[borderId]) {
-                const borderTile = this.getTileByID(borderId);
-                fillBorder(tile, borderTile);
-                fillBorder(borderTile, tile);
-            }
-        }
-
-        function fillBorder(tile, borderTile) {
-            tile.needsHillshadePrepare = true;
-            tile.needsTerrainPrepare = true;
-            let dx = borderTile.tileID.canonical.x - tile.tileID.canonical.x;
-            const dy = borderTile.tileID.canonical.y - tile.tileID.canonical.y;
-            const dim = Math.pow(2, tile.tileID.canonical.z);
-            const borderId = borderTile.tileID.key;
-            if (dx === 0 && dy === 0) return;
-
-            if (Math.abs(dy) > 1) {
-                return;
-            }
-            if (Math.abs(dx) > 1) {
-                // Adjust the delta coordinate for world wraparound.
-                if (Math.abs(dx + dim) === 1) {
-                    dx += dim;
-                } else if (Math.abs(dx - dim) === 1) {
-                    dx -= dim;
-                }
-            }
-            if (!borderTile.dem || !tile.dem) return;
-            tile.dem.backfillBorder(borderTile.dem, dx, dy);
-            if (tile.neighboringTiles && tile.neighboringTiles[borderId])
-                tile.neighboringTiles[borderId].backfilled = true;
         }
     }
     /**
@@ -373,8 +329,8 @@ export class TileManager extends Evented {
     /**
      * Get a specific tile by id
      */
-    getTileByID(id: string): Tile {
-        return this._tiles[id];
+    getTileByID(id: string): Tile | undefined {
+        return this._inViewTiles.getTileById(id);
     }
 
     /**
@@ -396,29 +352,28 @@ export class TileManager extends Evented {
      * Analogy: imagine two sheets of paper in 3D space:
      *   - one sheet = ideal tiles at varying overscaledZ
      *   - the second sheet = maxCoveringZoom
+     *
+     * @param retainTileMap - this parameters will be updated with the child tiles to keep
+     * @param idealTilesWithoutData - which of the ideal tiles currently does not have loaded data
+     * @return a set of tiles that need to be loaded
      */
-
-    _retainLoadedChildren(
-        targetTiles: Record<string, OverscaledTileID>,
-        retain: Record<string, OverscaledTileID>
-    ) {
-        const targetTileIDs = Object.values(targetTiles);
-        const loadedDescendents: Record<string, Tile[]> = this._getLoadedDescendents(targetTileIDs);
-        const incomplete: Record<string, OverscaledTileID> = {};
+    _retainLoadedChildren(retainTileMap: Record<string, OverscaledTileID>, idealTilesWithoutData: Set<OverscaledTileID>): Set<OverscaledTileID> {
+        const loadedDescendents: Record<string, Tile[]> = this._getLoadedDescendents(idealTilesWithoutData);
+        const incomplete = new Set<OverscaledTileID>();
 
         // retain the uppermost descendents of target tiles
-        for (const targetID of targetTileIDs) {
+        for (const targetID of idealTilesWithoutData) {
             const descendents = loadedDescendents[targetID.key];
             if (!descendents?.length) {
-                incomplete[targetID.key] = targetID;
+                incomplete.add(targetID);
                 continue;
             }
 
             // find descendents within the max covering zoom range
-            const maxCoveringZoom = targetID.overscaledZ + TileManager.maxUnderzooming;
+            const maxCoveringZoom = targetID.overscaledZ + TileManager.maxOverzooming;
             const candidates = descendents.filter(t => t.tileID.overscaledZ <= maxCoveringZoom);
             if (!candidates.length) {
-                incomplete[targetID.key] = targetID;
+                incomplete.add(targetID);
                 continue;
             }
 
@@ -426,12 +381,12 @@ export class TileManager extends Evented {
             const topZoom = Math.min(...candidates.map(t => t.tileID.overscaledZ));
             const topIDs = candidates.filter(t => t.tileID.overscaledZ === topZoom).map(t => t.tileID);
             for (const tileID of topIDs) {
-                retain[tileID.key] = tileID;
+                retainTileMap[tileID.key] = tileID;
             }
 
             //determine if the retained generation is fully covered
             if (!this._areDescendentsComplete(topIDs, topZoom, targetID.overscaledZ)) {
-                incomplete[targetID.key] = targetID;
+                incomplete.add(targetID);
             }
         }
 
@@ -441,18 +396,16 @@ export class TileManager extends Evented {
     /**
      * Return dictionary of qualified loaded descendents for each provided target tile id
      */
-    _getLoadedDescendents(targetTileIDs: OverscaledTileID[]) {
+    _getLoadedDescendents(targetTileIDs: Set<OverscaledTileID>) {
         const loadedDescendents: Record<string, Tile[]> = {};
 
         // enumerate current tiles and find the loaded descendents of each target tile
-        for (const id in this._tiles) {
-            const tile = this._tiles[id];
-            if (!tile.hasData()) continue;
-
+        for (const tile of this._inViewTiles.getAllTiles().filter(tile => tile.hasData())) {
             // determine if the loaded tile (hasData) is a qualified descendent of any target tile
             for (const targetID of targetTileIDs) {
                 if (tile.tileID.isChildOf(targetID)) {
-                    (loadedDescendents[targetID.key] ||= []).push(tile);
+                    loadedDescendents[targetID.key] ||= [];
+                    loadedDescendents[targetID.key].push(tile);
                 }
             }
         }
@@ -478,13 +431,10 @@ export class TileManager extends Evented {
     /**
      * Get a currently loaded tile.
      * - a cached tile is not a loaded tile
+     * @returns the tile if it's in view and had data, null otherwise.
      */
     getLoadedTile(tileID: OverscaledTileID): Tile | null {
-        const tile = this._tiles[tileID.key];
-        if (tile?.hasData()) {
-            return tile;
-        }
-        return null;
+        return this._inViewTiles.getLoadedTile(tileID);
     }
 
     /**
@@ -505,7 +455,7 @@ export class TileManager extends Evented {
         const maxSize = typeof this._maxTileCacheSize === 'number' ?
             Math.min(this._maxTileCacheSize, viewDependentMaxSize) : viewDependentMaxSize;
 
-        this._cache.setMaxSize(maxSize);
+        this._outOfViewCache.setMaxSize(maxSize);
     }
 
     handleWrapJump(lng: number) {
@@ -531,14 +481,7 @@ export class TileManager extends Evented {
         this._prevLng = lng;
 
         if (wrapDelta) {
-            const tiles: Record<string, Tile> = {};
-            for (const key in this._tiles) {
-                const tile = this._tiles[key];
-                tile.tileID = tile.tileID.unwrapTo(tile.tileID.wrap + wrapDelta);
-                tiles[tile.tileID.key] = tile;
-            }
-            this._tiles = tiles;
-
+            this._inViewTiles.handleWrapJump(wrapDelta);
             this._resetTileReloadTimers();
         }
     }
@@ -561,21 +504,23 @@ export class TileManager extends Evented {
 
         if (!this.used && !this.usedForTerrain) {
             idealTileIDs = [];
-        } else if (this._source.tileID) {
+        } else if (this._source.tileID) { // image source
             idealTileIDs = transform.getVisibleUnwrappedCoordinates(this._source.tileID)
                 .map((unwrapped) => new OverscaledTileID(unwrapped.canonical.z, unwrapped.wrap, unwrapped.canonical.z, unwrapped.canonical.x, unwrapped.canonical.y));
         } else {
             idealTileIDs = coveringTiles(transform, {
                 tileSize: this.usedForTerrain ? this.tileSize : this._source.tileSize,
                 minzoom: this._source.minzoom,
-                maxzoom: this._source.maxzoom,
+                maxzoom: this._source.type === 'vector' && this.map._zoomLevelsToOverscale !== undefined
+                    ? transform.maxZoom - this.map._zoomLevelsToOverscale
+                    : this._source.maxzoom,
                 roundZoom: this.usedForTerrain ? false : this._source.roundZoom,
                 reparseOverscaled: this._source.reparseOverscaled,
                 terrain,
-                calculateTileZoom: this._source.calculateTileZoom
+                calculateTileZoom: this._source.calculateTileZoom,
             });
 
-            if (this._source.hasTile) {
+            if (this._source.hasTile) { // tile should be in bounds
                 idealTileIDs = idealTileIDs.filter((coord) => this._source.hasTile(coord));
             }
         }
@@ -602,7 +547,7 @@ export class TileManager extends Evented {
         // enable fading for raster source except when using terrain which doesn't currently support fading
         const isRaster = isRasterType(this._source.type);
         if (isRaster && this._rasterFadeDuration > 0 && !terrain) {
-            this._updateFadingTiles(idealTileIDs, retain);
+            updateFadingTiles(this._inViewTiles, idealTileIDs, retain, this._maxFadingAncestorLevels, this._source.minzoom, this._source.maxzoom, this._rasterFadeDuration);
         }
 
         // clean up non-retained tiles that are no longer needed
@@ -617,9 +562,9 @@ export class TileManager extends Evented {
      * Remove raster tiles that are no longer retained
      */
     _cleanUpRasterTiles(retain: Record<string, OverscaledTileID>) {
-        for (const key in this._tiles) {
-            if (!retain[key]) {
-                this._removeTile(key);
+        for (const id of this._inViewTiles.getAllIds()) {
+            if (!retain[id]) {
+                this._removeTile(id);
             }
         }
     }
@@ -628,18 +573,18 @@ export class TileManager extends Evented {
      * Remove vector tiles that are no longer retained and also not needed for symbol fading
      */
     _cleanUpVectorTiles(retain: Record<string, OverscaledTileID>) {
-        for (const key in this._tiles) {
-            const tile = this._tiles[key];
+        for (const id of this._inViewTiles.getAllIds()) {
+            const tile = this._inViewTiles.getTileById(id);
 
             // retained - clear fade hold so if it's removed again fade timer starts fresh.
-            if (retain[key]) {
+            if (retain[id]) {
                 tile.clearSymbolFadeHold();
                 continue;
             }
 
             // remove non-retained tiles without symbols
             if (!tile.hasSymbolBuckets) {
-                this._removeTile(key);
+                this._removeTile(id);
                 continue;
             }
 
@@ -647,7 +592,7 @@ export class TileManager extends Evented {
             if (!tile.holdingForSymbolFade()) {
                 tile.setSymbolHoldDuration(this.map._fadeDuration);
             } else if (tile.symbolFadeFinished()) {
-                this._removeTile(key);
+                this._removeTile(id);
             }
         }
     }
@@ -672,8 +617,8 @@ export class TileManager extends Evented {
     }
 
     releaseSymbolFadeTiles() {
-        for (const id in this._tiles) {
-            if (this._tiles[id].holdingForSymbolFade()) {
+        for (const id of this._inViewTiles.getAllIds()) {
+            if (this._inViewTiles.getTileById(id).holdingForSymbolFade()) {
                 this._removeTile(id);
             }
         }
@@ -684,29 +629,25 @@ export class TileManager extends Evented {
      * children so they can be displayed as substitutes pending load of each ideal tile (to reduce flickering).
      * If no loaded children are available, fallback to seeking loaded parents as an alternative substitute.
      */
-    _updateRetainedTiles(idealTileIDs: Array<OverscaledTileID>, zoom: number): Record<string, OverscaledTileID> {
-        const retain: Record<string, OverscaledTileID> = {};
-        const checked: Record<string, boolean> = {};
-        const minCoveringZoom = Math.max(zoom - TileManager.maxOverzooming, this._source.minzoom);
-
-        let missingIdealTiles = {};
+    _updateRetainedTiles(idealTileIDs: OverscaledTileID[], zoom: number): Record<string, OverscaledTileID> {
+        const idealTilesWithoutData = new Set<OverscaledTileID>();
         for (const idealID of idealTileIDs) {
             const idealTile = this._addTile(idealID);
 
-            // retain the tile even if it's not loaded because it's an ideal tile.
-            retain[idealID.key] = idealID;
-
             if (!idealTile.hasData()) {
-                missingIdealTiles[idealID.key] = idealID;
+                idealTilesWithoutData.add(idealID);
             }
         }
 
-        missingIdealTiles = this._retainLoadedChildren(missingIdealTiles, retain);
+        // retain the tile even if it's not loaded because it's an ideal tile.
+        const retainTileMap: Record<string, OverscaledTileID> = idealTileIDs.reduce((acc, t) => { acc[t.key] = t; return acc;}, {});
+        const tileIdsWithoutData = this._retainLoadedChildren(retainTileMap, idealTilesWithoutData);
 
         // for remaining missing tiles with incomplete child coverage, seek a loaded parent tile
-        for (const idealKey in missingIdealTiles) {
-            const tileID = missingIdealTiles[idealKey];
-            let tile = this._tiles[idealKey];
+        const checked: Record<string, boolean> = {};
+        const minCoveringZoom = Math.max(zoom - TileManager.maxUnderzooming, this._source.minzoom);
+        for (const tileID of tileIdsWithoutData) {
+            let tile = this._inViewTiles.getTileById(tileID.key);
 
             // As we ascend up the tile pyramid of the ideal tile, we check whether the parent
             // tile has been previously requested (and errored because we only loop over tiles with no data)
@@ -727,7 +668,7 @@ export class TileManager extends Evented {
                 if (tile) {
                     const hasData = tile.hasData();
                     if (hasData || !this.map?.cancelPendingTileRequestsWhileZooming || parentWasRequested) {
-                        retain[parentId.key] = parentId;
+                        retainTileMap[parentId.key] = parentId;
                     }
                     // Save the current values, since they're the parent of the next iteration
                     // of the parent tile ascent loop.
@@ -737,195 +678,18 @@ export class TileManager extends Evented {
             }
         }
 
-        return retain;
-    }
-
-    /**
-     * Designate fading bases and parents using a many-to-one relationship where the lower children fade in/out
-     * with their parents. Raster shaders are not currently designed for a one-to-many fade relationship.
-     *
-     * Tiles that are candidates for fading out must be loaded and rendered tiles, as loading a tile to then
-     * fade it out would not appear smoothly. The first source of truth for tile fading always starts at the
-     * ideal tile, which continually changes on map adjustment. The state of the previously rendered ideal
-     * tile plane indicates which direction to fade each part of the newer ideal plane (with varying z).
-     *
-     * For a pitched map, the back of the map can have decreasing zooms while the front can have increasing zooms.
-     * Fade logic must therefore adapt dynamically based on the previously rendered ideal tile set.
-     */
-    _updateFadingTiles(idealTileIDs: OverscaledTileID[], retain: Record<string, OverscaledTileID>) {
-        const currentTime: number = now();
-        const edgeTileIDs: Set<OverscaledTileID> = getEdgeTiles(idealTileIDs);
-
-        for (const idealID of idealTileIDs) {
-            const idealTile = this._tiles[idealID.key];
-
-            // reset any previously departing(ed) tiles that are now ideal tiles
-            if (idealTile.fadingDirection === FadingDirections.Departing || idealTile.fadeOpacity === 0) {
-                idealTile.resetFadeLogic();
-            }
-
-            const parentIsFader = this._updateFadingAncestor(idealTile, retain, currentTime);
-            if (parentIsFader) continue;
-
-            const childIsFader = this._updateFadingDescendents(idealTile, retain, currentTime);
-            if (childIsFader) continue;
-
-            const edgeIsFader = this._updateFadingEdge(idealTile, edgeTileIDs, currentTime);
-            if (edgeIsFader) continue;
-
-            // for all remaining non-fading ideal tiles reset the fade logic
-            idealTile.resetFadeLogic();
-        }
-    }
-
-    /**
-     * Many-to-one cross-fade. Set 4 ideal tiles as the fading base for a rendered parent tile
-     * as the fading parent. Here the parent is fading out and the ideal tile is fading in.
-     *
-     * Parent tile - fading out                                ■                                -- Fading Parent
-     *                                   ┌──────────────┬──────┴───────┬──────────────┐
-     * Ideal tiles - fading in           ■              ■              ■              ■         -- Base Role = Incoming
-     *                             ┌───┬─┴─┬───┐  ┌───┬─┴─┬───┐  ┌───┬─┴─┬───┐  ┌───┬─┴─┬───┐
-     *                             ■   ■   ■   ■  ■   ■   ■   ■  ■   ■   ■   ■  ■   ■   ■   ■
-     */
-    _updateFadingAncestor(idealTile: Tile, retain: Record<string, OverscaledTileID>, now: number): boolean {
-        if (!idealTile.hasData()) return false;
-
-        const {tileID: idealID, fadingRole, fadingDirection, fadingParentID} = idealTile;
-        // ideal tile already has fading parent - retain and return
-        if (fadingRole === FadingRoles.Base && fadingDirection === FadingDirections.Incoming && fadingParentID) {
-            retain[fadingParentID.key] = fadingParentID;
-            return true;
-        }
-
-        // find a loaded parent tile to fade with the ideal tile
-        const minAncestorZ = Math.max(idealID.overscaledZ - this._maxFadingAncestorLevels, this._source.minzoom);
-        for (let ancestorZ = idealID.overscaledZ - 1; ancestorZ >= minAncestorZ; ancestorZ--) {
-            const ancestorID = idealID.scaledTo(ancestorZ);
-            const ancestorTile = this.getLoadedTile(ancestorID);
-            if (!ancestorTile) continue;
-
-            // ideal tile (base) is fading in
-            idealTile.setCrossFadeLogic({
-                fadingRole: FadingRoles.Base,
-                fadingDirection: FadingDirections.Incoming,
-                fadingParentID: ancestorTile.tileID,  // fading out
-                fadeEndTime: now + this._rasterFadeDuration
-            });
-            // ancestor tile (parent) is fading out
-            ancestorTile.setCrossFadeLogic({
-                fadingRole: FadingRoles.Parent,
-                fadingDirection: FadingDirections.Departing,
-                fadeEndTime: now + this._rasterFadeDuration
-            });
-
-            retain[ancestorID.key] = ancestorID;
-            return true;
-        }
-        return false;
-    }
-
-    /**
-     * Many-to-one cross-fade. Search descendents of ideal tiles as the fading base with the ideal tile
-     * as the fading parent. Here the children are fading out and the ideal tile is fading in.
-     *
-     *                                                         ■
-     *                                   ┌──────────────┬──────┴───────┬──────────────┐
-     * Ideal tiles - fading in           ■              ■              ■              ■          -- Fading Parent
-     *                             ┌───┬─┴─┬───┐  ┌───┬─┴─┬───┐  ┌───┬─┴─┬───┐  ┌───┬─┴─┬───┐
-     * Child tiles - fading out    ■   ■   ■   ■  ■   ■   ■   ■  ■   ■   ■   ■  ■   ■   ■   ■    -- Base Role = Departing
-     *
-     * Try direct children first. If none found, try grandchildren. Stops at the first generation that provides a fader.
-     */
-    _updateFadingDescendents(idealTile: Tile, retain: Record<string, OverscaledTileID>, now: number): boolean {
-        if (!idealTile.hasData()) return false;
-
-        // search first level of descendents (4 tiles)
-        const idealChildren = idealTile.tileID.children(this._source.maxzoom);
-        let hasFader = this._updateFadingChildren(idealTile, idealChildren, retain, now);
-        if (hasFader) return true;
-
-        // search second level of descendents (16 tiles)
-        for (const childID of idealChildren) {
-            const grandChildIDs = childID.children(this._source.maxzoom);
-            if (this._updateFadingChildren(idealTile, grandChildIDs, retain, now)) {
-                hasFader = true;
-            }
-        }
-
-        return hasFader;
-    }
-
-    _updateFadingChildren(idealTile: Tile, childIDs: OverscaledTileID[], retain: Record<string, OverscaledTileID>, now: number): boolean {
-        if (childIDs[0].overscaledZ >= this._source.maxzoom) return false;
-        let foundFader = false;
-
-        // find loaded child tiles to fade with the ideal tile
-        for (const childID of childIDs) {
-            const childTile = this.getLoadedTile(childID);
-            if (!childTile) continue;
-
-            const {fadingRole, fadingDirection, fadingParentID} = childTile;
-            if (fadingRole !== FadingRoles.Base || fadingDirection !== FadingDirections.Departing || !fadingParentID) {
-                // child tile (base) is fading out
-                childTile.setCrossFadeLogic({
-                    fadingRole: FadingRoles.Base,
-                    fadingDirection: FadingDirections.Departing,
-                    fadingParentID: idealTile.tileID,
-                    fadeEndTime: now + this._rasterFadeDuration
-                });
-                // ideal tile (parent) is fading in
-                idealTile.setCrossFadeLogic({
-                    fadingRole: FadingRoles.Parent,
-                    fadingDirection: FadingDirections.Incoming,
-                    fadeEndTime: now + this._rasterFadeDuration
-                });
-            }
-
-            retain[childID.key] = childID;
-            foundFader = true;
-        }
-
-        return foundFader;
-    }
-
-    /**
-     * One-to-one self fading for unloaded edge tiles (for panning sideways on map). for loading tiles over gaps it feels
-     * more natural for them to fade in, however if they are already loaded/cached then there is no need to fade as map will
-     * look cohesive with no gaps. Note that draw_raster determines fade priority, as many-to-one fade supersedes edge fading.
-     */
-    _updateFadingEdge(idealTile: Tile, edgeTileIDs: Set<OverscaledTileID>, now: number): boolean {
-        const idealID: OverscaledTileID = idealTile.tileID;
-
-        // tile is already self fading
-        if (idealTile.selfFading) {
-            return true;
-        }
-
-        // fading not needed for tiles that are already loaded
-        if (idealTile.hasData()) {
-            return false;
-        }
-
-        // enable fading for loading edges with no data
-        if (edgeTileIDs.has(idealID)) {
-            const fadeEndTime = now + this._rasterFadeDuration;
-            idealTile.setSelfFadeLogic(fadeEndTime);
-            return true;
-        }
-
-        return false;
+        return retainTileMap;
     }
 
     /**
      * Add a tile, given its coordinate, to the pyramid.
      */
     _addTile(tileID: OverscaledTileID): Tile {
-        let tile = this._tiles[tileID.key];
+        let tile = this._inViewTiles.getTileById(tileID.key);
         if (tile)
             return tile;
 
-        tile = this._cache.getAndRemove(tileID);
+        tile = this._outOfViewCache.getAndRemove(tileID);
         if (tile) {
             //reset fading logic to remove stale fading data from cache
             tile.resetFadeLogic();
@@ -946,7 +710,7 @@ export class TileManager extends Evented {
         }
 
         tile.uses++;
-        this._tiles[tileID.key] = tile;
+        this._inViewTiles.setTile(tileID.key, tile);
         if (!cached) {
             this._source.fire(new Event('dataloading', {tile, coord: tile.tileID, dataType: 'source'}));
         }
@@ -983,8 +747,8 @@ export class TileManager extends Evented {
             clearTimeout(this._timers[id]);
             delete this._timers[id];
         }
-        for (const id in this._tiles) {
-            const tile = this._tiles[id];
+        for (const id of this._inViewTiles.getAllIds()) {
+            const tile = this._inViewTiles.getTileById(id);
             this._setTileReloadTimer(id, tile);
         }
     }
@@ -992,12 +756,13 @@ export class TileManager extends Evented {
     /**
      * Reload any currently renderable tiles that are match one of the incoming `tileId` x/y/z
      */
-    refreshTiles(tileIds: Array<ICanonicalTileID>) {
-        for (const id in this._tiles) {
-            if (!this._isIdRenderable(id) && this._tiles[id].state != 'errored') {
+    refreshTiles(tileIds: ICanonicalTileID[]) {
+        for (const id of this._inViewTiles.getAllIds()) {
+            const tile = this._inViewTiles.getTileById(id);
+            if (!this._inViewTiles.isIdRenderable(id) && tile.state != 'errored') {
                 continue;
             }
-            if (tileIds.some(tid => tid.equals(this._tiles[id].tileID.canonical))) {
+            if (tileIds.some(tid => tid.equals(tile.tileID.canonical))) {
                 this._reloadTile(id, 'expired');
             }
         }
@@ -1007,19 +772,19 @@ export class TileManager extends Evented {
      * Remove a tile, given its id, from the pyramid
      */
     _removeTile(id: string) {
-        const tile = this._tiles[id];
+        const tile = this._inViewTiles.getTileById(id);
         if (!tile)
             return;
 
         tile.uses--;
-        delete this._tiles[id];
+        this._inViewTiles.deleteTileById(id);
         this._clearTileReloadTimer(id);
 
         if (tile.uses > 0)
             return;
 
         if (tile.hasData() && tile.state !== 'reloading') {
-            this._cache.add(tile.tileID, tile, tile.getExpiryTimeout());
+            this._outOfViewCache.add(tile.tileID, tile, tile.getExpiryTimeout());
         } else {
             tile.aborted = true;
             this._abortTile(tile);
@@ -1058,10 +823,11 @@ export class TileManager extends Evented {
         this._shouldReloadOnResume = false;
         this._paused = false;
 
-        for (const id in this._tiles)
+        for (const id of this._inViewTiles.getAllIds()) {
             this._removeTile(id);
+        }
 
-        this._cache.reset();
+        this._outOfViewCache.reset();
     }
 
     /**
@@ -1070,7 +836,7 @@ export class TileManager extends Evented {
      * @param pointQueryGeometry - coordinates of the corners of bounding rectangle
      * @returns result items have `{tile, minX, maxX, minY, maxY}`, where min/max bounding values are the given bounds transformed in into the coordinate space of this tile.
      */
-    tilesIn(pointQueryGeometry: Array<Point>, maxPitchScaleFactor: number, has3DLayer: boolean): TileResult[] {
+    tilesIn(pointQueryGeometry: Point[], maxPitchScaleFactor: number, has3DLayer: boolean): TileResult[] {
         const tileResults: TileResult[] = [];
 
         const transform = this.transform;
@@ -1089,8 +855,8 @@ export class TileManager extends Evented {
 
         const cameraBounds = Bounds.fromPoints(cameraQueryGeometry);
 
-        for (let i = 0; i < ids.length; i++) {
-            const tile = this._tiles[ids[i]];
+        for (const id of ids) {
+            const tile = this._inViewTiles.getTileById(id);
             if (tile.holdingForSymbolFade()) {
                 // Tiles held for fading are covered by tiles that are closer to ideal
                 continue;
@@ -1107,7 +873,7 @@ export class TileManager extends Evented {
 
                 if (tileSpaceBounds.intersects(EXTENT_BOUNDS)) {
 
-                    const tileSpaceQueryGeometry: Array<Point> = queryGeometry.map((c) => tileID.getTilePoint(c));
+                    const tileSpaceQueryGeometry: Point[] = queryGeometry.map((c) => tileID.getTilePoint(c));
                     const tileSpaceCameraQueryGeometry = cameraQueryGeometry.map((c) => tileID.getTilePoint(c));
 
                     tileResults.push({
@@ -1146,8 +912,8 @@ export class TileManager extends Evented {
         return transformed;
     }
 
-    getVisibleCoordinates(symbolLayer?: boolean): Array<OverscaledTileID> {
-        const coords = this.getRenderableIds(symbolLayer).map((id) => this._tiles[id].tileID);
+    getVisibleCoordinates(symbolLayer?: boolean): OverscaledTileID[] {
+        const coords = this.getRenderableIds(symbolLayer).map((id) => this._inViewTiles.getTileById(id).tileID);
         if (this.transform) {
             this.transform.populateCache(coords);
         }
@@ -1159,17 +925,7 @@ export class TileManager extends Evented {
             return true;
         }
 
-        if (isRasterType(this._source.type) && this._rasterFadeDuration > 0) {
-            const currentTime = now();
-            for (const id in this._tiles) {
-                const tile = this._tiles[id];
-                if (tile.fadeEndTime >= currentTime) {
-                    return true;
-                }
-            }
-        }
-
-        return false;
+        return isRasterType(this._source.type) && hasRasterTransition(this._inViewTiles, this._rasterFadeDuration);
     }
 
     setRasterFadeDuration(fadeDuration: number) {
@@ -1180,7 +936,7 @@ export class TileManager extends Evented {
      * Set the value of a particular state for a feature
      */
     setFeatureState(sourceLayer: string, featureId: number | string, state: any) {
-        sourceLayer = sourceLayer || '_geojsonTileLayer';
+        sourceLayer ||= GEOJSON_TILE_LAYER_NAME;
         this._state.updateState(sourceLayer, featureId, state);
     }
 
@@ -1188,7 +944,7 @@ export class TileManager extends Evented {
      * Resets the value of a particular state key for a feature
      */
     removeFeatureState(sourceLayer?: string, featureId?: number | string, key?: string) {
-        sourceLayer = sourceLayer || '_geojsonTileLayer';
+        sourceLayer ||= GEOJSON_TILE_LAYER_NAME;
         this._state.removeFeatureState(sourceLayer, featureId, key);
     }
 
@@ -1196,7 +952,7 @@ export class TileManager extends Evented {
      * Get the entire state object for a feature
      */
     getFeatureState(sourceLayer: string, featureId: number | string) {
-        sourceLayer = sourceLayer || '_geojsonTileLayer';
+        sourceLayer ||= GEOJSON_TILE_LAYER_NAME;
         return this._state.getState(sourceLayer, featureId);
     }
 
@@ -1204,8 +960,8 @@ export class TileManager extends Evented {
      * Sets the set of keys that the tile depends on. This allows tiles to
      * be reloaded when their dependencies change.
      */
-    setDependencies(tileKey: string, namespace: string, dependencies: Array<string>) {
-        const tile = this._tiles[tileKey];
+    setDependencies(tileKey: string, namespace: string, dependencies: string[]) {
+        const tile = this._inViewTiles.getTileById(tileKey);
         if (tile) {
             tile.setDependencies(namespace, dependencies);
         }
@@ -1214,29 +970,22 @@ export class TileManager extends Evented {
     /**
      * Reloads all tiles that depend on the given keys.
      */
-    reloadTilesForDependencies(namespaces: Array<string>, keys: Array<string>) {
-        for (const id in this._tiles) {
-            const tile = this._tiles[id];
+    reloadTilesForDependencies(namespaces: string[], keys: string[]) {
+        for (const id of this._inViewTiles.getAllIds()) {
+            const tile = this._inViewTiles.getTileById(id);
             if (tile.hasDependency(namespaces, keys)) {
                 this._reloadTile(id, 'reloading');
             }
         }
-        this._cache.filter(tile => !tile.hasDependency(namespaces, keys));
+        this._outOfViewCache.filter(tile => !tile.hasDependency(namespaces, keys));
     }
-}
 
-TileManager.maxOverzooming = 10;
-TileManager.maxUnderzooming = 3;
-
-function compareTileId(a: OverscaledTileID, b: OverscaledTileID): number {
-    // Different copies of the world are sorted based on their distance to the center.
-    // Wrap values are converted to unsigned distances by reserving odd number for copies
-    // with negative wrap and even numbers for copies with positive wrap.
-    const aWrap = Math.abs(a.wrap * 2) - +(a.wrap < 0);
-    const bWrap = Math.abs(b.wrap * 2) - +(b.wrap < 0);
-    return a.overscaledZ - b.overscaledZ || bWrap - aWrap || b.canonical.y - a.canonical.y || b.canonical.x - a.canonical.x;
-}
-
-function isRasterType(type) {
-    return type === 'raster' || type === 'image' || type === 'video';
+    areTilesLoaded(): boolean {
+        for (const tile of this._inViewTiles.getAllTiles()) {
+            if (!(tile.state === 'loaded' || tile.state === 'errored')) {
+                return false;
+            }
+        }
+        return true;
+    }
 }

@@ -56,11 +56,11 @@ export interface Handler {
     reset(): void;
     // Handlers can optionally implement these methods.
     // They are called with dom events whenever those dom evens are received.
-    readonly touchstart?: (e: TouchEvent, points: Array<Point>, mapTouches: Array<Touch>) => HandlerResult | void;
-    readonly touchmove?: (e: TouchEvent, points: Array<Point>, mapTouches: Array<Touch>) => HandlerResult | void;
-    readonly touchmoveWindow?: (e: TouchEvent, points: Array<Point>, mapTouches: Array<Touch>) => HandlerResult | void;
-    readonly touchend?: (e: TouchEvent, points: Array<Point>, mapTouches: Array<Touch>) => HandlerResult | void;
-    readonly touchcancel?: (e: TouchEvent, points: Array<Point>, mapTouches: Array<Touch>) => HandlerResult | void;
+    readonly touchstart?: (e: TouchEvent, points: Point[], mapTouches: Touch[]) => HandlerResult | void;
+    readonly touchmove?: (e: TouchEvent, points: Point[], mapTouches: Touch[]) => HandlerResult | void;
+    readonly touchmoveWindow?: (e: TouchEvent, points: Point[], mapTouches: Touch[]) => HandlerResult | void;
+    readonly touchend?: (e: TouchEvent, points: Point[], mapTouches: Touch[]) => HandlerResult | void;
+    readonly touchcancel?: (e: TouchEvent, points: Point[], mapTouches: Touch[]) => HandlerResult | void;
     readonly mousedown?: (e: MouseEvent, point: Point) => HandlerResult | void;
     readonly mousemove?: (e: MouseEvent, point: Point) => HandlerResult | void;
     readonly mousemoveWindow?: (e: MouseEvent, point: Point) => HandlerResult | void;
@@ -98,7 +98,7 @@ export type HandlerResult = {
     /**
      * A method that can fire a one-off easing by directly changing the map's camera.
      */
-    cameraAnimation?: (map: Map) => any;
+    cameraAnimation?: (map: Map) => void;
     /**
      * The last three properties are needed by only one handler: scrollzoom.
      * The DOM event to be used as the `originalEvent` on any camera change events.
@@ -137,7 +137,7 @@ export type MapControlsScenarioOptions = {
 };
 
 function hasChange(result: HandlerResult) {
-    return (result.panDelta && result.panDelta.mag()) || result.zoomDelta || result.bearingDelta || result.pitchDelta || result.rollDelta;
+    return result.panDelta?.mag() || result.zoomDelta || result.bearingDelta || result.pitchDelta || result.rollDelta;
 }
 
 export class HandlerManager {
@@ -146,7 +146,7 @@ export class HandlerManager {
     _handlers: Array<{
         handlerName: string;
         handler: Handler;
-        allowed: Array<string>;
+        allowed: string[];
     }>;
     _eventsInProgress: EventsInProgress;
     _frameId: number;
@@ -162,6 +162,22 @@ export class HandlerManager {
         passive?: boolean;
         capture?: boolean;
     } | undefined]>;
+
+    /**
+     * @internal
+     * The document that contains the map container element, for cross-window support.
+     */
+    get _ownerDocument(): Document {
+        return this._el?.ownerDocument || document;
+    }
+
+    /**
+     * @internal
+     * The window that contains the map container element, for cross-window support.
+     */
+    get _ownerWindow(): Window {
+        return this._el?.ownerDocument?.defaultView || window;
+    }
 
     constructor(map: Map, options: CompleteMapOptions) {
         this._map = map;
@@ -203,8 +219,8 @@ export class HandlerManager {
             // window-level event listeners give us the best shot at capturing events that
             // fall outside the map canvas element. Use `{capture: true}` for the move event
             // to prevent map move events from being fired during a drag.
-            [document, 'mousemove', {capture: true}],
-            [document, 'mouseup', undefined],
+            [this._ownerDocument, 'mousemove', {capture: true}],
+            [this._ownerDocument, 'mouseup', undefined],
 
             [el, 'mouseover', undefined],
             [el, 'mouseout', undefined],
@@ -217,17 +233,17 @@ export class HandlerManager {
             [el, 'wheel', {passive: false}],
             [el, 'contextmenu', undefined],
 
-            [window, 'blur', undefined]
+            [this._ownerWindow, 'blur', undefined]
         ];
 
         for (const [target, type, listenerOptions] of this._listeners) {
-            DOM.addEventListener(target, type, target === document ? this.handleWindowEvent : this.handleEvent, listenerOptions);
+            target.addEventListener(type, target === this._ownerDocument ? this.handleWindowEvent : this.handleEvent, listenerOptions);
         }
     }
 
     destroy() {
         for (const [target, type, listenerOptions] of this._listeners) {
-            DOM.removeEventListener(target, type, target === document ? this.handleWindowEvent : this.handleEvent, listenerOptions);
+            target.removeEventListener(type, target === this._ownerDocument ? this.handleWindowEvent : this.handleEvent, listenerOptions);
         }
     }
 
@@ -310,7 +326,7 @@ export class HandlerManager {
         }
     }
 
-    _add(handlerName: string, handler: Handler, allowed?: Array<string>) {
+    _add(handlerName: string, handler: Handler, allowed?: string[]) {
         this._handlers.push({handlerName, handler, allowed});
         this._handlersById[handlerName] = handler;
     }
@@ -345,10 +361,10 @@ export class HandlerManager {
         return Boolean(isMoving(this._eventsInProgress)) || this.isZooming();
     }
 
-    _blockedByActive(activeHandlers: {[x: string]: Handler}, allowed: Array<string>, myName: string) {
+    _blockedByActive(activeHandlers: {[x: string]: Handler}, allowed: string[], myName: string) {
         for (const name in activeHandlers) {
             if (name === myName) continue;
-            if (!allowed || allowed.indexOf(name) < 0) {
+            if (!allowed?.includes(name)) {
                 return true;
             }
         }
@@ -411,7 +427,7 @@ export class HandlerManager {
                         data = handler[eventName || e.type](e);
                     }
                     this.mergeHandlerResult(mergedHandlerResult, eventsInProgress, data, handlerName, inputEvent);
-                    if (data && data.needsRenderFrame) {
+                    if (data?.needsRenderFrame) {
                         this._triggerRenderFrame();
                     }
                 }
@@ -512,7 +528,7 @@ export class HandlerManager {
         const terrain = map.terrain;
 
         if (!hasChange(combinedResult) && !(terrain && this._terrainMovement)) {
-            return this._fireEvents(combinedEventsInProgress, deactivatedHandlers, true);
+            this._fireEvents(combinedEventsInProgress, deactivatedHandlers, true); return;
         }
 
         // stop any ongoing camera animations (easeTo, flyTo)
@@ -524,7 +540,7 @@ export class HandlerManager {
             around = pinchAround;
         }
 
-        around = around || map.transform.centerPoint;
+        around ||= map.transform.centerPoint;
 
         if (terrain && !tr.isPointOnMapSurface(around)) {
             around = tr.centerPoint;

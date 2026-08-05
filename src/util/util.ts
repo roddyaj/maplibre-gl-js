@@ -9,6 +9,16 @@ import {type OverscaledTileID} from '../tile/tile_id';
 import type {Event} from './evented';
 
 /**
+ * Ensures that a value is an `Error` instance.
+ * If the value is already an `Error`, it is returned as-is.
+ * Otherwise, a new `Error` is created from its string representation.
+ */
+export function ensureError(e: unknown): Error {
+    if (e instanceof Error) return e;
+    return new Error(typeof e === 'string' ? e : String(e));
+}
+
+/**
  * Returns a new 64 bit float vec4 of zeroes.
  */
 export function createVec4f64(): vec4 { return new Float64Array(4) as any; }
@@ -274,7 +284,7 @@ export function lerp(a: number, b: number, mix: number): number {
  * For a given collection of 2D points, returns their axis-aligned bounding box,
  * in the format [minX, minY, maxX, maxY].
  */
-export function getAABB(points: Array<Point>): [number, number, number, number] {
+export function getAABB(points: Point[]): [number, number, number, number] {
     let tlX = Infinity;
     let tlY = Infinity;
     let brX = -Infinity;
@@ -304,7 +314,7 @@ export function getEdgeTiles(tileIDs: OverscaledTileID[]): Set<OverscaledTileID>
     let minY = Infinity, maxY = -Infinity;
 
     // project all tiles to targetZ while maintaining the reference to the original tile
-    const projected: {id: OverscaledTileID; x: number; y: number}[] = [];
+    const projected: Array<{id: OverscaledTileID; x: number; y: number}> = [];
     for (const id of tileIDs) {
         const {x, y, z} = id.canonical;
         const scale = Math.pow(2, targetZ - z);
@@ -400,7 +410,7 @@ export function wrap(n: number, min: number, max: number): number {
 export function keysDifference<S, T>(
     obj: {[key: string]: S},
     other: {[key: string]: T}
-): Array<string> {
+): string[] {
     const difference = [];
     for (const i in obj) {
         if (!(i in other)) {
@@ -422,8 +432,8 @@ export function keysDifference<S, T>(
 export function extend<T extends {}, U>(dest: T, source: U): T & U;
 export function extend<T extends {}, U, V>(dest: T, source1: U, source2: V): T & U & V;
 export function extend<T extends {}, U, V, W>(dest: T, source1: U, source2: V, source3: W): T & U & V & W;
-export function extend(dest: object, ...sources: Array<any>): any;
-export function extend(dest: object, ...sources: Array<any>): any {
+export function extend(dest: object, ...sources: any[]): any;
+export function extend(dest: object, ...sources: any[]): any {
     for (const src of sources) {
         for (const k in src) {
             dest[k] = src[k];
@@ -451,8 +461,7 @@ type KeysOfUnion<T> = T extends T ? keyof T: never;
  */
 export function pick<T extends object>(src: T, properties: Array<KeysOfUnion<T>>): Partial<T> {
     const result: Partial<T> = {};
-    for (let i = 0; i < properties.length; i++) {
-        const k = properties[i];
+    for (const k of properties) {
         if (k in src) {
             result[k] = src[k];
         }
@@ -496,6 +505,23 @@ export function zoomScale(zoom: number) { return Math.pow(2, zoom); }
  * Computes zoom level from scaling.
  */
 export function scaleZoom(scale: number) { return Math.log(scale) / Math.LN2; }
+
+/**
+ * Evaluates the snapped zoom level based on zoomSnap. If zoomSnap is 0 or less, the zoom level is returned unchanged.
+ * If delta is provided, it performs directional snapping (ceil for zoom-in, floor for zoom-out).
+ * @param zoom - The input zoom level
+ * @param zoomSnap - The grid interval to snap to, e.g. 1.0 for 1.0 zoom levels, 0.5 for 0.5 zoom levels, etc.
+ * @param delta - Optional scroll delta or direction. If positive, snaps up; if negative, snaps down.
+ * @returns The snapped zoom level
+ */
+export function evaluateZoomSnap(zoom: number, zoomSnap: number, delta?: number): number {
+    if (zoomSnap <= 0) return zoom;
+    const inv = 1 / zoomSnap;
+    if (delta === undefined || Math.abs(delta) < 1e-10) {
+        return Math.round(zoom * inv) / inv;
+    }
+    return (delta > 0 ? Math.ceil(zoom * inv - 1e-9) : Math.floor(zoom * inv + 1e-10)) / inv;
+}
 
 /**
  * Create an object by mapping all the values of an existing object while
@@ -555,7 +581,7 @@ export function clone<T>(input: T): T {
     if (Array.isArray(input)) {
         return input.map(clone) as any as T;
     } else if (typeof input === 'object' && input) {
-        return mapObject(input, clone) as any as T;
+        return mapObject(input, clone) as T;
     } else {
         return input;
     }
@@ -564,9 +590,9 @@ export function clone<T>(input: T): T {
 /**
  * Check if two arrays have at least one common element.
  */
-export function arraysIntersect<T>(a: Array<T>, b: Array<T>): boolean {
-    for (let l = 0; l < a.length; l++) {
-        if (b.indexOf(a[l]) >= 0) return true;
+export function arraysIntersect<T>(a: T[], b: T[]): boolean {
+    for (const element of a) {
+        if (b.includes(element)) return true;
     }
     return false;
 }
@@ -766,7 +792,7 @@ export const arrayBufferToImageBitmap = async (data: ArrayBuffer): Promise<Image
     try {
         return createImageBitmap(blob);
     } catch (e) {
-        throw new Error(`Could not load image because of ${e.message}. Please make sure to use a supported image type such as PNG or JPEG. Note that SVGs are not supported.`);
+        throw new Error(`Could not load image because of ${ensureError(e).message}. Please make sure to use a supported image type such as PNG or JPEG. Note that SVGs are not supported.`);
     }
 };
 
@@ -792,7 +818,7 @@ export const arrayBufferToImage = (data: ArrayBuffer): Promise<HTMLImageElement>
             // but don't free the image immediately because it might be uploaded in the next frame
             // https://github.com/mapbox/mapbox-gl-js/issues/10226
             img.onload = null;
-            window.requestAnimationFrame(() => { img.src = transparentPngUrl; });
+            window.requestAnimationFrame(() => img.src = transparentPngUrl);
         };
         img.onerror = () => reject(new Error('Could not load image. Please make sure to use a supported image type such as PNG or JPEG. Note that SVGs are not supported.'));
         const blob: Blob = new Blob([new Uint8Array(data)], {type: 'image/png'});
@@ -1086,6 +1112,13 @@ export type Complete<T> = {
  */
 export type RequireAtLeastOne<T> = { [K in keyof T]-?: Required<Pick<T, K>> & Partial<Pick<T, Exclude<keyof T, K>>>; }[keyof T];
 
+/**
+* A helper to allow require exactly one one property
+ */
+export type ExactlyOne<T, Keys extends keyof T = keyof T> = {
+    [K in Keys]: Required<Pick<T, K>> & { [P in Exclude<Keys, K>]?: never }
+}[Keys];
+
 export type TileJSON = {
     tilejson: '2.2.0' | '2.1.0' | '2.0.1' | '2.0.0' | '1.0.0';
     name?: string;
@@ -1093,9 +1126,9 @@ export type TileJSON = {
     version?: string;
     attribution?: string;
     template?: string;
-    tiles: Array<string>;
-    grids?: Array<string>;
-    data?: Array<string>;
+    tiles: string[];
+    grids?: string[];
+    data?: string[];
     minzoom?: number;
     maxzoom?: number;
     bounds?: [number, number, number, number];
@@ -1143,8 +1176,18 @@ export function isTouchableEvent(event: Event, eventType: string): event is Touc
     return touchableEvents[eventType] && 'touches' in event;
 }
 
+/**
+ * Checks if an event is a pointable event (mouse or wheel event).
+ * Uses the event target's window context for cross-window support.
+ */
 export function isPointableEvent(event: Event, eventType: string): event is MouseEvent {
-    return pointableEvents[eventType] && (event instanceof MouseEvent || event instanceof WheelEvent);
+    if (!pointableEvents[eventType]) return false;
+
+    // Get the window context from the event target to use the correct constructor.
+    const domEvent = event as globalThis.Event;
+    const target = domEvent?.target as Element | null;
+    const targetWindow = target?.ownerDocument?.defaultView || window;
+    return domEvent instanceof targetWindow.MouseEvent || domEvent instanceof targetWindow.WheelEvent;
 }
 
 export function isTouchableOrPointableType(eventType: string): boolean {

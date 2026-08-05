@@ -95,7 +95,7 @@ export class GlobeTransform implements ITransform {
         this._helper.setPadding(padding);
     }
     interpolatePadding(start: PaddingOptions, target: PaddingOptions, t: number): void {
-        return this._helper.interpolatePadding(start, target, t);
+        this._helper.interpolatePadding(start, target, t);
     }
     isPaddingEqual(padding: PaddingOptions): boolean {
         return this._helper.isPaddingEqual(padding);
@@ -109,8 +109,8 @@ export class GlobeTransform implements ITransform {
     setMaxBounds(bounds?: LngLatBounds): void {
         this._helper.setMaxBounds(bounds);
     }
-    setConstrain(constrain?: TransformConstrainFunction | null): void {
-        this._helper.setConstrain(constrain);
+    setConstrainOverride(constrain?: TransformConstrainFunction | null): void {
+        this._helper.setConstrainOverride(constrain);
     }
     overrideNearFarZ(nearZ: number, farZ: number): void {
         this._helper.overrideNearFarZ(nearZ, farZ);
@@ -206,17 +206,17 @@ export class GlobeTransform implements ITransform {
     get cameraToCenterDistance(): number {
         return this._helper.cameraToCenterDistance;
     }
-    get constrain(): TransformConstrainFunction {
-        return this._helper.constrain;
+    get constrainOverride(): TransformConstrainFunction {
+        return this._helper.constrainOverride;
     }
-    public get nearZ(): number { 
-        return this._helper.nearZ; 
+    public get nearZ(): number {
+        return this._helper.nearZ;
     }
-    public get farZ(): number { 
-        return this._helper.farZ; 
+    public get farZ(): number {
+        return this._helper.farZ;
     }
-    public get autoCalculateNearFarZ(): boolean { 
-        return this._helper.autoCalculateNearFarZ; 
+    public get autoCalculateNearFarZ(): boolean {
+        return this._helper.autoCalculateNearFarZ;
     }
     //
     // Implementation of globe transform
@@ -255,8 +255,8 @@ export class GlobeTransform implements ITransform {
 
     public constructor(options?: TransformOptions) {
         this._helper = new TransformHelper({
-            calcMatrices: () => { this._calcMatrices(); },
-            constrain: (center, zoom) => { return this.defaultConstrain(center, zoom); }
+            calcMatrices: () => this._calcMatrices(),
+            defaultConstrain: (center, zoom) => { return this.defaultConstrain(center, zoom); }
         }, options);
         this._globeness = 1; // When transform is cloned for use in symbols, `_updateAnimation` function which usually sets this value never gets called.
         this._mercatorTransform = new MercatorTransform();
@@ -267,14 +267,14 @@ export class GlobeTransform implements ITransform {
         const clone = new GlobeTransform();
         clone._globeness = this._globeness;
         clone._globeLatitudeErrorCorrectionRadians = this._globeLatitudeErrorCorrectionRadians;
-        clone.apply(this);
+        clone.apply(this, false);
         return clone;
     }
 
-    public apply(that: IReadonlyTransform): void {
-        this._helper.apply(that);
-        this._mercatorTransform.apply(this);
-        this._verticalPerspectiveTransform.apply(this, this._globeLatitudeErrorCorrectionRadians);
+    public apply(that: IReadonlyTransform, constrain: boolean): void {
+        this._helper.apply(that, constrain);
+        this._mercatorTransform.apply(this, false);
+        this._verticalPerspectiveTransform.apply(this, false, this._globeLatitudeErrorCorrectionRadians);
     }
 
     public get projectionMatrix(): mat4 { return this.currentTransform.projectionMatrix; }
@@ -332,7 +332,7 @@ export class GlobeTransform implements ITransform {
         // - if autoCalculateNearFarZ is true then it computes globe Z values
         // - if autoCalculateNearFarZ is false then it inherits our Z values
         // In either case, its Z values are consistent with out settings and we want to copy its Z values to our helper.
-        this._verticalPerspectiveTransform.apply(this, this._globeLatitudeErrorCorrectionRadians);
+        this._verticalPerspectiveTransform.apply(this, false, this._globeLatitudeErrorCorrectionRadians);
         this._helper._nearZ = this._verticalPerspectiveTransform.nearZ;
         this._helper._farZ = this._verticalPerspectiveTransform.farZ;
 
@@ -403,6 +403,10 @@ export class GlobeTransform implements ITransform {
         return this.currentTransform.defaultConstrain(lngLat, zoom);
     };
 
+    applyConstrain: TransformConstrainFunction = (lngLat, zoom) => {
+        return this._helper.applyConstrain(lngLat, zoom);
+    };
+
     calculateCenterFromCameraLngLatAlt(lngLat: LngLatLike, alt: number, bearing?: number, pitch?: number): {center: LngLat; elevation: number; zoom: number} {
         return this._helper.calculateCenterFromCameraLngLatAlt(lngLat, alt, bearing, pitch);
     }
@@ -414,11 +418,11 @@ export class GlobeTransform implements ITransform {
     setLocationAtPoint(lnglat: LngLat, point: Point): void {
         if (!this.isGlobeRendering) {
             this._mercatorTransform.setLocationAtPoint(lnglat, point);
-            this.apply(this._mercatorTransform);
+            this.apply(this._mercatorTransform, false);
             return;
         }
         this._verticalPerspectiveTransform.setLocationAtPoint(lnglat, point);
-        this.apply(this._verticalPerspectiveTransform);
+        this.apply(this._verticalPerspectiveTransform, false);
         return;
     }
 

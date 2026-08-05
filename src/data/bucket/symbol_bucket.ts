@@ -20,7 +20,7 @@ import {SymbolLayoutArray,
 import Point from '@mapbox/point-geometry';
 import {SegmentVector} from '../segment';
 import {ProgramConfigurationSet} from '../program_configuration';
-import {TriangleIndexArray, LineIndexArray} from '../index_array_type';
+import {TriangleIndexArray, LineIndexArray} from '../array_types.g';
 import {transformText} from '../../symbol/transform_text';
 import {mergeLines} from '../../symbol/merge_lines';
 import {allowsVerticalWritingMode, stringContainsRTLText} from '../../util/script_detection';
@@ -37,7 +37,6 @@ import {EvaluationParameters} from '../../style/evaluation_parameters';
 import {Formatted, ResolvedImage} from '@maplibre/maplibre-gl-style-spec';
 import {rtlWorkerPlugin} from '../../source/rtl_text_plugin_worker';
 import {getOverlapMode} from '../../style/style_layer/overlap_mode';
-import {isSafari} from '../../util/util';
 import type {CanonicalTileID} from '../../tile/tile_id';
 import type {
     Bucket,
@@ -48,14 +47,14 @@ import type {
 import type {CollisionBoxArray, CollisionBox, SymbolInstance} from '../array_types.g';
 import type {StructArray, StructArrayMember, ViewType} from '../../util/struct_array';
 import type {SymbolStyleLayer} from '../../style/style_layer/symbol_style_layer';
-import type {Context} from '../../gl/context';
-import type {IndexBuffer} from '../../gl/index_buffer';
-import type {VertexBuffer} from '../../gl/vertex_buffer';
+import type {Context} from '../../webgl/context';
+import type {IndexBuffer} from '../../webgl/index_buffer';
+import type {VertexBuffer} from '../../webgl/vertex_buffer';
 import type {SymbolQuad} from '../../symbol/quads';
 import type {SizeData} from '../../symbol/symbol_size';
 import type {FeatureStates} from '../../source/source_state';
 import type {ImagePosition} from '../../render/image_atlas';
-import type {VectorTileLayer} from '@mapbox/vector-tile';
+import type {VectorTileLayerLike} from '@maplibre/vt-pbf';
 
 export type SingleCollisionBox = {
     x1: number;
@@ -83,7 +82,7 @@ export type SymbolFeature = {
     icon: ResolvedImage;
     index: number;
     sourceLayerIndex: number;
-    geometry: Array<Array<Point>>;
+    geometry: Point[][];
     properties: any;
     type: 'Unknown' | 'Point' | 'LineString' | 'Polygon';
     id?: any;
@@ -233,7 +232,7 @@ register('SymbolBuffers', SymbolBuffers);
 
 class CollisionBuffers {
     layoutVertexArray: StructArray;
-    layoutAttributes: Array<StructArrayMember>;
+    layoutAttributes: StructArrayMember[];
     layoutVertexBuffer: VertexBuffer;
 
     indexArray: TriangleIndexArray | LineIndexArray;
@@ -247,7 +246,7 @@ class CollisionBuffers {
     constructor(LayoutArray: {
         new (...args: any): StructArray;
     },
-    layoutAttributes: Array<StructArrayMember>,
+    layoutAttributes: StructArrayMember[],
     IndexArray: {
         new (...args: any): TriangleIndexArray | LineIndexArray;
     }) {
@@ -313,10 +312,10 @@ export class SymbolBucket implements Bucket {
     collisionBoxArray: CollisionBoxArray;
     zoom: number;
     overscaling: number;
-    layers: Array<SymbolStyleLayer>;
-    layerIds: Array<string>;
-    stateDependentLayers: Array<SymbolStyleLayer>;
-    stateDependentLayerIds: Array<string>;
+    layers: SymbolStyleLayer[];
+    layerIds: string[];
+    stateDependentLayers: SymbolStyleLayer[];
+    stateDependentLayerIds: string[];
 
     index: number;
     sdfIcons: boolean;
@@ -331,22 +330,22 @@ export class SymbolBucket implements Bucket {
 
     glyphOffsetArray: GlyphOffsetArray;
     lineVertexArray: SymbolLineVertexArray;
-    features: Array<SymbolFeature>;
+    features: SymbolFeature[];
     symbolInstances: SymbolInstanceArray;
     textAnchorOffsets: TextAnchorOffsetArray;
-    collisionArrays: Array<CollisionArrays>;
-    sortKeyRanges: Array<SortKeyRange>;
+    collisionArrays: CollisionArrays[];
+    sortKeyRanges: SortKeyRange[];
     pixelRatio: number;
     tilePixelRatio: number;
-    compareText: {[_: string]: Array<Point>};
+    compareText: {[_: string]: Point[]};
     fadeStartTime: number;
     sortFeaturesByKey: boolean;
     sortFeaturesByY: boolean;
     canOverlap: boolean;
     sortedAngle: number;
-    featureSortOrder: Array<number>;
+    featureSortOrder: number[];
 
-    collisionCircleArray: Array<number>;
+    collisionCircleArray: number[];
 
     text: SymbolBuffers;
     icon: SymbolBuffers;
@@ -355,7 +354,7 @@ export class SymbolBucket implements Bucket {
     uploaded: boolean;
     sourceLayerIndex: number;
     sourceID: string;
-    symbolInstanceIndexes: Array<number>;
+    symbolInstanceIndexes: number[];
     writingModes: WritingMode[];
     allowVerticalPlacement: boolean;
     hasRTLText: boolean;
@@ -363,7 +362,7 @@ export class SymbolBucket implements Bucket {
     constructor(options: BucketParameters<SymbolStyleLayer>) {
         this.collisionBoxArray = options.collisionBoxArray;
         this.zoom = options.zoom;
-        this.overscaling = isSafari(globalThis) ? Math.min(options.overscaling, 128) : options.overscaling;
+        this.overscaling = options.overscaling;
         this.layers = options.layers;
         this.layerIds = this.layers.map(layer => layer.id);
         this.index = options.index;
@@ -403,8 +402,8 @@ export class SymbolBucket implements Bucket {
     }
 
     createArrays() {
-        this.text = new SymbolBuffers(new ProgramConfigurationSet(this.layers, this.zoom, property => /^text/.test(property)));
-        this.icon = new SymbolBuffers(new ProgramConfigurationSet(this.layers, this.zoom, property => /^icon/.test(property)));
+        this.text = new SymbolBuffers(new ProgramConfigurationSet(this.layers, this.zoom, property => property.startsWith('text')));
+        this.icon = new SymbolBuffers(new ProgramConfigurationSet(this.layers, this.zoom, property => property.startsWith('icon')));
 
         this.glyphOffsetArray = new GlyphOffsetArray();
         this.lineVertexArray = new SymbolLineVertexArray();
@@ -419,18 +418,18 @@ export class SymbolBucket implements Bucket {
         allowVerticalPlacement: boolean,
         doesAllowVerticalWritingMode: boolean) {
 
-        for (let i = 0; i < text.length; i++) {
-            stack[text.charCodeAt(i)] = true;
+        for (const char of text) {
+            stack[char.codePointAt(0)] = true;
             if ((textAlongLine || allowVerticalPlacement) && doesAllowVerticalWritingMode) {
-                const verticalChar = verticalizedCharacterMap[text.charAt(i)];
+                const verticalChar = verticalizedCharacterMap[char];
                 if (verticalChar) {
-                    stack[verticalChar.charCodeAt(0)] = true;
+                    stack[verticalChar.codePointAt(0)] = true;
                 }
             }
         }
     }
 
-    populate(features: Array<IndexedFeature>, options: PopulateParameters, canonical: CanonicalTileID) {
+    populate(features: IndexedFeature[], options: PopulateParameters, canonical: CanonicalTileID) {
         const layer = this.layers[0];
         const layout = layer.layout;
 
@@ -479,11 +478,11 @@ export class SymbolBucket implements Bucket {
                 const formattedText = Formatted.factory(resolvedTokens);
 
                 // on this instance: if hasRTLText is already true, all future calls to containsRTLText can be skipped.
-                const bucketHasRTLText = this.hasRTLText = (this.hasRTLText || containsRTLText(formattedText));
+                this.hasRTLText ||= containsRTLText(formattedText);
                 if (
-                    !bucketHasRTLText || // non-rtl text so can proceed safely
+                    !this.hasRTLText || // non-rtl text so can proceed safely
                     rtlWorkerPlugin.getRTLTextPluginStatus() === 'unavailable' || // We don't intend to lazy-load the rtl text plugin, so proceed with incorrect shaping
-                    bucketHasRTLText && rtlWorkerPlugin.isParsed() // Use the rtlText plugin to shape text
+                    this.hasRTLText && rtlWorkerPlugin.isParsed() // Use the rtlText plugin to shape text
                 ) {
                     text = transformText(formattedText, layer, evaluationFeature);
                 }
@@ -529,13 +528,13 @@ export class SymbolBucket implements Bucket {
             if (text) {
                 const fontStack = textFont.evaluate(evaluationFeature, {}, canonical).join(',');
                 const textAlongLine = layout.get('text-rotation-alignment') !== 'viewport' && layout.get('symbol-placement') !== 'point';
-                this.allowVerticalPlacement = this.writingModes && this.writingModes.indexOf(WritingMode.vertical) >= 0;
+                this.allowVerticalPlacement = this.writingModes?.includes(WritingMode.vertical);
                 for (const section of text.sections) {
                     if (!section.image) {
                         const doesAllowVerticalWritingMode = allowsVerticalWritingMode(text.toString());
                         const sectionFont = section.fontStack || fontStack;
-                        const sectionStack = stacks[sectionFont] = stacks[sectionFont] || {};
-                        this.calculateGlyphDependencies(section.text, sectionStack, textAlongLine, this.allowVerticalPlacement, doesAllowVerticalWritingMode);
+                        stacks[sectionFont] ||= {};
+                        this.calculateGlyphDependencies(section.text, stacks[sectionFont], textAlongLine, this.allowVerticalPlacement, doesAllowVerticalWritingMode);
                     } else {
                         // Add section image to the list of dependencies.
                         icons[section.image.name] = true;
@@ -545,7 +544,7 @@ export class SymbolBucket implements Bucket {
         }
 
         if (layout.get('symbol-placement') === 'line') {
-            // Merge adjacent lines with the same text to improve labelling.
+            // Merge adjacent lines with the same text to improve labeling.
             // It's better to place labels on one long line than on many short segments.
             this.features = mergeLines(this.features);
         }
@@ -558,7 +557,7 @@ export class SymbolBucket implements Bucket {
         }
     }
 
-    update(states: FeatureStates, vtLayer: VectorTileLayer, imagePositions: {[_: string]: ImagePosition}) {
+    update(states: FeatureStates, vtLayer: VectorTileLayerLike, imagePositions: {[_: string]: ImagePosition}) {
         if (!this.stateDependentLayers.length) return;
         this.text.programConfigurations.updatePaintArrays(states, vtLayer, this.layers, {
             imagePositions
@@ -602,7 +601,7 @@ export class SymbolBucket implements Bucket {
         }
     }
 
-    addToLineVertexArray(anchor: Anchor, line: Array<Point>) {
+    addToLineVertexArray(anchor: Anchor, line: Point[]) {
         const lineStartIndex = this.lineVertexArray.length;
         if (anchor.segment !== undefined) {
             let sumForwardLength = anchor.dist(line[anchor.segment + 1]);
@@ -632,7 +631,7 @@ export class SymbolBucket implements Bucket {
     }
 
     addSymbols(arrays: SymbolBuffers,
-        quads: Array<SymbolQuad>,
+        quads: SymbolQuad[],
         sizeVertex: any,
         lineOffset: [number, number],
         alongLine: boolean,
@@ -675,7 +674,7 @@ export class SymbolBucket implements Bucket {
             this.glyphOffsetArray.emplaceBack(glyphOffset[0]);
 
             if (i === quads.length - 1 || sectionIndex !== quads[i + 1].sectionIndex) {
-                arrays.programConfigurations.populatePaintArrays(layoutVertexArray.length, feature, feature.index, {imagePositions: {}, canonical, formattedSection: sections && sections[sectionIndex]});
+                arrays.programConfigurations.populatePaintArrays(layoutVertexArray.length, feature, feature.index, {imagePositions: {}, canonical, formattedSection: sections?.[sectionIndex]});
             }
         }
 
@@ -890,7 +889,7 @@ export class SymbolBucket implements Bucket {
 
     addToSortKeyRanges(symbolInstanceIndex: number, sortKey: number) {
         const last = this.sortKeyRanges[this.sortKeyRanges.length - 1];
-        if (last && last.sortKey === sortKey) {
+        if (last?.sortKey === sortKey) {
             last.symbolInstanceEnd = symbolInstanceIndex + 1;
         } else {
             this.sortKeyRanges.push({
@@ -926,18 +925,20 @@ export class SymbolBucket implements Bucket {
             const symbolInstance = this.symbolInstances.get(i);
             this.featureSortOrder.push(symbolInstance.featureIndex);
 
-            [
+            const textIndices = [
                 symbolInstance.rightJustifiedTextSymbolIndex,
                 symbolInstance.centerJustifiedTextSymbolIndex,
                 symbolInstance.leftJustifiedTextSymbolIndex
-            ].forEach((index, i, array) => {
+            ];
+            for (let i = 0; i < textIndices.length; i++) {
+                const index = textIndices[i];
                 // Only add a given index the first time it shows up,
                 // to avoid duplicate opacity entries when multiple justifications
                 // share the same glyphs.
-                if (index >= 0 && array.indexOf(index) === i) {
+                if (index >= 0 && textIndices.indexOf(index) === i) {
                     this.addIndicesForPlacedSymbol(this.text, index);
                 }
-            });
+            }
 
             if (symbolInstance.verticalPlacedTextSymbolIndex >= 0) {
                 this.addIndicesForPlacedSymbol(this.text, symbolInstance.verticalPlacedTextSymbolIndex);
